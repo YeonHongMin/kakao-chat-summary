@@ -15,7 +15,7 @@
 | LLM | 키 | 환경변수 | 모델 | API 호환성 | 비고 |
 |-----|-----|----------|------|------------|------|
 | Z.AI GLM | `glm` | `ZAI_API_KEY` | glm-4.7 | OpenAI | 기본, 권장 |
-| MiniMax Coding Plan | `minimax` | `MINIMAX_API_KEY` | MiniMax-M2.1 | OpenAI | 고속 처리 |
+| MiniMax Coding Plan | `minimax` | `MINIMAX_API_KEY` | MiniMax-M2.1 | Anthropic | 고속 처리 |
 | Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | sonar | OpenAI | |
 
 > 💡 **ChatGPT** (`chatgpt`, `OPENAI_API_KEY`, gpt-4o-mini)도 지원하지만, **Rate Limit 3 RPM** 제한으로 대량 처리에는 부적합합니다.

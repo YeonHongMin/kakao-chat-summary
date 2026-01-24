@@ -35,12 +35,14 @@
 **역할**: 전역 설정 및 다중 LLM 제공자 관리
 
 **LLM 제공자 설정**:
-| Provider | API URL | Model | 환경변수 | 비고 |
-|----------|---------|-------|----------|------|
-| glm | .../api/coding/paas/v4/chat/completions | glm-4.7 | ZAI_API_KEY | 기본, 권장 |
-| minimax | .../v1/chat/completions | MiniMax-M2.1 | MINIMAX_API_KEY | 고속 |
-| perplexity | .../chat/completions | sonar | PERPLEXITY_API_KEY | |
-| chatgpt | .../v1/chat/completions | gpt-4o-mini | OPENAI_API_KEY | ⚠️ 3 RPM |
+| Provider | API URL | Model | 환경변수 | API 호환성 | 비고 |
+|----------|---------|-------|----------|------------|------|
+| glm | .../api/coding/paas/v4/chat/completions | glm-4.7 | ZAI_API_KEY | OpenAI | 기본, 권장 |
+| minimax | .../v1/chat/completions | MiniMax-M2.1 | MINIMAX_API_KEY | OpenAI | 고속 |
+| perplexity | .../chat/completions | sonar | PERPLEXITY_API_KEY | OpenAI | |
+| chatgpt | .../v1/chat/completions | gpt-4o-mini | OPENAI_API_KEY | OpenAI | ⚠️ 3 RPM |
+
+> 📌 **API 호환성 원칙**: 모든 LLM 제공자는 **OpenAI 호환 API** (`/chat/completions` 엔드포인트)를 사용합니다. Anthropic(Claude) 형식은 현재 지원하지 않습니다.
 
 **주요 메서드**:
 | 메서드 | 설명 |
@@ -57,7 +59,9 @@
 
 **클래스**: `LLMClient`
 
-모든 LLM 제공자는 OpenAI 호환 API 형식을 사용합니다.
+**API 호환성**: OpenAI 호환 API 형식만 지원
+- 요청 형식: `{"model": "...", "messages": [{"role": "user", "content": "..."}]}`
+- 응답 형식: `{"choices": [{"message": {"content": "..."}}], "usage": {...}}`
 - **Rate Limit**: ChatGPT의 경우 분당 3회 요청 제한을 준수하기 위해 요청 간 21초 대기 로직이 포함되어 있습니다.
 
 | 메서드 | 반환 타입 | 설명 |

@@ -12,13 +12,15 @@
 
 ## 🤖 지원 LLM
 
-| LLM | 키 | 환경변수 | 모델 | 비고 |
-|-----|-----|----------|------|------|
-| Z.AI GLM | `glm` | `ZAI_API_KEY` | glm-4.7 | 기본, 권장 |
-| MiniMax Coding Plan | `minimax` | `MINIMAX_API_KEY` | MiniMax-M2.1 | 고속 처리 |
-| Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | sonar | |
+| LLM | 키 | 환경변수 | 모델 | API 호환성 | 비고 |
+|-----|-----|----------|------|------------|------|
+| Z.AI GLM | `glm` | `ZAI_API_KEY` | glm-4.7 | OpenAI | 기본, 권장 |
+| MiniMax Coding Plan | `minimax` | `MINIMAX_API_KEY` | MiniMax-M2.1 | OpenAI | 고속 처리 |
+| Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | sonar | OpenAI | |
 
 > 💡 **ChatGPT** (`chatgpt`, `OPENAI_API_KEY`, gpt-4o-mini)도 지원하지만, **Rate Limit 3 RPM** 제한으로 대량 처리에는 부적합합니다.
+
+> ℹ️ **API 호환성**: 모든 LLM 제공자는 **OpenAI 호환 API** 형식(`/chat/completions`)을 사용합니다. Anthropic(Claude) 형식은 현재 지원하지 않습니다.
 
 ## 📋 요약 결과 섹션
 

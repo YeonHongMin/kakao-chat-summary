@@ -60,6 +60,10 @@
 | 파일 | 형식 | 설명 |
 |------|------|------|
 | `*_summaries.md` | Markdown | 날짜별 통합 요약 리포트 |
+| `*_full_summary.md` | Markdown | 어제~오늘 상세 요약 |
+| `*_simple_summary.md` | Markdown | 어제~오늘 간결 요약 (음슴체) |
+| `*_full_today_summary.md` | Markdown | 오늘 상세 요약 |
+| `*_simple_today_summary.md` | Markdown | 오늘 간결 요약 (음슴체) |
 | `*_url.txt` | Text | 추출된 URL 목록 |
 
 ---

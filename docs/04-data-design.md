@@ -150,12 +150,12 @@ kakao-chat-summary/
 │   └── summarizer_YYYYMMDD.log    # 날짜별 상세 로그
 │
 ├── src/                           # 소스 코드
-│   ├── config.py                  # 설정 관리 (다중 LLM)
+│   ├── full_config.py                  # 설정 관리 (다중 LLM)
 │   ├── parser.py                  # 카카오톡 파싱
 │   ├── llm_client.py              # 통합 LLM API 클라이언트
 │   ├── chat_processor.py          # 채팅 요약 처리
-│   ├── date_summarizer.py         # 전체 날짜 요약 (메인)
-│   ├── yesterday_summarizer.py    # 어제 날짜 요약
+│   ├── full_date_summary.py         # 전체 날짜 요약 (메인)
+│   ├── full_yesterday_summary.py    # 어제 날짜 요약
 │   └── url_extractor.py           # URL 추출
 │
 ├── docs/                          # 문서

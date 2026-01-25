@@ -4,14 +4,14 @@
 
 ### Phase 1: 기반 구축
 - [x] 프로젝트 구조 설계
-- [x] `config.py` - 설정 관리 모듈 구현
+- [x] `full_config.py` - 설정 관리 모듈 구현
 - [x] `parser.py` - 카카오톡 파싱 모듈 구현
 
 ### Phase 2: 핵심 기능
 - [x] `llm_client.py` - 통합 LLM API 클라이언트
 - [x] `chat_processor.py` - 요약 처리 모듈 구현
-- [x] `date_summarizer.py` - 날짜별 요약 오케스트레이터
-- [x] `yesterday_summarizer.py` - 어제 날짜 요약
+- [x] `full_date_summary.py` - 날짜별 요약 오케스트레이터
+- [x] `full_yesterday_summary.py` - 어제 날짜 요약
 - [x] `url_extractor.py` - URL 추출 모듈
 
 ### Phase 3: 다중 LLM 지원

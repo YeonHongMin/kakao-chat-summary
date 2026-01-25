@@ -18,7 +18,7 @@
 
 | 대상 | 스타일 | 예시 |
 |------|--------|------|
-| 모듈 | snake_case | `date_summarizer.py` |
+| 모듈 | snake_case | `full_date_summary.py` |
 | 클래스 | PascalCase | `ChatProcessor` |
 | 함수/메서드 | snake_case | `process_summary()` |
 | 변수 | snake_case | `messages_by_date` |
@@ -53,7 +53,7 @@ def summarize(self, text):
 
 ```python
 """
-config.py - 애플리케이션 설정 관리 모듈
+full_config.py - 애플리케이션 설정 관리 모듈
 
 이 모듈은 프로젝트 전역에서 사용되는 설정값들을 중앙에서 관리합니다.
 - API 키, URL, 모델명 등의 외부 서비스 설정
@@ -105,7 +105,7 @@ from typing import Dict, List, Optional
 import requests
 
 # 로컬 모듈
-from config import config
+from full_config import config
 from parser import KakaoLogParser
 ```
 
@@ -156,7 +156,7 @@ module.py - 모듈 설명
 from typing import ...
 import ...
 
-from config import config
+from full_config import config
 
 # 상수
 CONSTANT_VALUE = ...

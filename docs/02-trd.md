@@ -4,7 +4,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│              date_summarizer.py / yesterday_summarizer.py    │
+│              full_date_summary.py / full_yesterday_summary.py    │
 │                      (메인 오케스트레이터)                     │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
@@ -21,7 +21,7 @@
 │         └─────────────────┼─────────────────────┘           │
 │                           │                                 │
 │                   ┌───────┴────────┐                       │
-│                   │   config.py    │                       │
+│                   │   full_config.py    │                       │
 │                   │ (다중 LLM 설정) │                       │
 │                   └────────────────┘                       │
 └─────────────────────────────────────────────────────────────┘
@@ -31,7 +31,7 @@
 
 ## 2. 모듈 상세
 
-### 2.1 config.py
+### 2.1 full_config.py
 **역할**: 전역 설정 및 다중 LLM 제공자 관리
 
 **LLM 제공자 설정**:
@@ -104,12 +104,12 @@
 
 ---
 
-### 2.5 date_summarizer.py
+### 2.5 full_date_summary.py
 **역할**: 날짜별 전체 요약 오케스트레이터
 
 **CLI 옵션**:
 ```bash
-python date_summarizer.py [--llm PROVIDER] <file_or_directory>
+python full_date_summary.py [--llm PROVIDER] <file_or_directory>
 ```
 
 **클래스**:
@@ -118,12 +118,12 @@ python date_summarizer.py [--llm PROVIDER] <file_or_directory>
 
 ---
 
-### 2.6 yesterday_summarizer.py
+### 2.6 full_yesterday_summary.py
 **역할**: 어제 날짜만 요약
 
 **CLI 옵션**:
 ```bash
-python yesterday_summarizer.py [--llm PROVIDER] <file_or_directory>
+python full_yesterday_summary.py [--llm PROVIDER] <file_or_directory>
 ```
 
 ---
@@ -145,7 +145,7 @@ python yesterday_summarizer.py [--llm PROVIDER] <file_or_directory>
        │
        ▼
 ┌──────────────────┐
-│  config.py       │  ← LLM 제공자 설정
+│  full_config.py       │  ← LLM 제공자 설정
 └────────┬─────────┘
          │
          ▼

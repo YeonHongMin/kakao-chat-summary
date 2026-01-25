@@ -7,7 +7,7 @@ Markdown 형식으로 결과를 포맷팅하는 기능을 제공합니다.
 
 from datetime import datetime
 from typing import Optional
-from config import config
+from full_config import config
 from llm_client import LLMClient
 
 

@@ -8,7 +8,7 @@ llm_client.py - 통합 LLM API 클라이언트 모듈
 from typing import Dict, Any, Optional
 import time
 import requests
-from config import config, LLM_PROVIDERS
+from full_config import config, LLM_PROVIDERS
 
 # ChatGPT Rate Limit: 3 RPM (분당 3 요청)
 # 안전하게 21초 대기 (60초 / 3 = 20초 + 1초 여유)

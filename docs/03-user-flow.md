@@ -64,11 +64,18 @@
 ### 시나리오 A: LLM 지정하여 실행
 
 ```bash
-# ChatGPT로 요약
-python src/date_summarizer.py --llm chatgpt data/chat.txt
+# ChatGPT로 전체 요약
+python src/full_date_summary.py --llm chatgpt data/chat.txt
 
-# Perplexity로 어제 요약
-python src/yesterday_summarizer.py --llm perplexity data/chat.txt
+# Perplexity로 어제~오늘 요약
+python src/full_yesterday_summary.py --llm perplexity data/chat.txt
+
+# MiniMax로 오늘 요약
+python src/full_today_summary.py --llm minimax data/chat.txt
+
+# 간결 요약 (음슴체)
+python src/simple_yesterday_summary.py --llm minimax data/chat.txt
+python src/simple_today_summary.py --llm minimax data/chat.txt
 ```
 
 **콘솔 출력 예시**:
@@ -91,15 +98,15 @@ Processing 5 dates -> 'chat_summaries.md'
 ### 시나리오 B: 대화형 실행
 
 ```bash
-python src/date_summarizer.py
+python src/full_date_summary.py
 ```
 
 **콘솔 출력 예시**:
 ```
 Usage:
-  python date_summarizer.py <file>
-  python date_summarizer.py <directory>
-  python date_summarizer.py --llm chatgpt <file>
+  python full_date_summary.py <file>
+  python full_date_summary.py <directory>
+  python full_date_summary.py --llm chatgpt <file>
 
 🤖 LLM 제공자 선택:
   1. Z.AI GLM (glm)
@@ -132,7 +139,7 @@ Processing 3 dates -> '코딩모임_KakaoTalk_summaries.md'
 ### 시나리오 C: 디렉터리 일괄 처리
 
 ```bash
-python src/date_summarizer.py --llm minimax data/
+python src/full_date_summary.py --llm minimax data/
 ```
 
 **콘솔 출력 예시**:

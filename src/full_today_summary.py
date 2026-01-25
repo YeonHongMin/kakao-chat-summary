@@ -1,21 +1,21 @@
 """
-yesterday_summarizer.py - 어제 날짜 대화만 요약하는 모듈
+full_today_summary.py - 오늘 날짜 대화 요약 모듈
 
-파싱된 대화 중 어제 날짜의 대화만 필터링하여 요약을 생성합니다.
+파싱된 대화 중 오늘 날짜(현재까지)의 대화만 필터링하여 요약을 생성합니다.
 
 사용법:
-    python yesterday_summarizer.py <filepath>              # 단일 파일
-    python yesterday_summarizer.py <directory>             # 디렉터리 일괄
-    python yesterday_summarizer.py --llm chatgpt <file>    # LLM 지정
-    python yesterday_summarizer.py                         # 대화형 모드
+    python full_today_summary.py <filepath>              # 단일 파일
+    python full_today_summary.py <directory>             # 디렉터리 일괄
+    python full_today_summary.py --llm chatgpt <file>    # LLM 지정
+    python full_today_summary.py                         # 대화형 모드
 """
 
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
 
-from config import config, LLM_PROVIDERS
+from full_config import config, LLM_PROVIDERS
 from parser import KakaoLogParser
 from chat_processor import ChatProcessor
 from url_extractor import extract_urls_from_text, save_urls_to_file
@@ -23,24 +23,24 @@ from url_extractor import extract_urls_from_text, save_urls_to_file
 logger = config.logger
 
 
-def get_yesterday_date() -> str:
-    """어제 날짜를 YYYY-MM-DD 형식으로 반환."""
-    yesterday = datetime.now() - timedelta(days=1)
-    return yesterday.strftime("%Y-%m-%d")
+def get_today_date() -> str:
+    """오늘 날짜를 YYYY-MM-DD 형식으로 반환."""
+    today = datetime.now()
+    return today.strftime("%Y-%m-%d")
 
 
-class YesterdaySummarizer:
-    """어제 날짜 대화만 요약하는 클래스."""
+class TodaySummarizer:
+    """오늘 날짜 대화만 요약하는 클래스."""
     
     def __init__(self, filepath: Path, provider: Optional[str] = None):
         self.filepath = filepath
         self.parser = KakaoLogParser()
         self.processor = ChatProcessor(provider)
-        self.yesterday = get_yesterday_date()
-        self.output_file = filepath.parent / f"{filepath.stem}_yesterday_summary.md"
+        self.today = get_today_date()
+        self.output_file = filepath.parent / f"{filepath.stem}_full_today_summary.md"
 
     def run(self) -> bool:
-        """어제 날짜 요약 처리를 실행."""
+        """오늘 날짜 요약 처리를 실행."""
         if not self.filepath.exists():
             logger.error(f"File not found: {self.filepath}")
             return False
@@ -54,34 +54,33 @@ class YesterdaySummarizer:
             print(f"   ⚠️  파싱된 메시지가 없습니다.")
             return False
 
-        if self.yesterday not in parse_result.messages_by_date:
-            print(f"   ℹ️  어제({self.yesterday}) 날짜의 대화가 없습니다.")
+        if self.today not in parse_result.messages_by_date:
+            print(f"   ℹ️  오늘({self.today}) 날짜의 대화가 없습니다.")
             return False
 
-        messages = parse_result.messages_by_date[self.yesterday]
+        messages = parse_result.messages_by_date[self.today]
         msg_count = len(messages)
         
-        print(f"   ▶ {self.yesterday} ({msg_count}개 메시지) 요약 중...")
+        print(f"   ▶ {self.today} ({msg_count}개 메시지) 요약 중...")
         
         chat_content = "\n".join(messages)
         summary_result = self.processor.process_summary(chat_content)
         
         if "[ERROR]" in summary_result:
-            logger.error(f"{self.yesterday} 요약 실패: {summary_result}")
+            logger.error(f"{self.today} 요약 실패: {summary_result}")
             print(f"   ❌ 요약 실패 (로그 참조)")
             return False
         
         self._save_summary(msg_count, summary_result)
-        self._extract_urls()
         
         print(f"   ✅ 완료: {self.output_file.name}")
         return True
 
     def _save_summary(self, msg_count: int, summary_md: str):
         with open(self.output_file, 'w', encoding='utf-8') as f:
-            f.write(f"# 📚 카카오톡 대화 요약 - {self.yesterday}\n")
+            f.write(f"# 📚 카카오톡 대화 요약 - {self.today}\n")
             f.write(f"- **원본 파일**: {self.filepath.name}\n")
-            f.write(f"- **대상 날짜**: {self.yesterday} (어제)\n")
+            f.write(f"- **대상 날짜**: {self.today} (오늘)\n")
             f.write(f"- **메시지 수**: {msg_count}개\n")
             f.write(f"- **LLM**: {config.get_provider_info().name}\n")
             f.write(f"- **생성 일시**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -112,27 +111,14 @@ class YesterdaySummarizer:
                 
         return "\n".join(lines[start_idx:end_idx]).strip() if start_idx < end_idx else text
 
-    def _extract_urls(self):
-        try:
-            full_text = self.output_file.read_text(encoding='utf-8')
-            url_dict = extract_urls_from_text(full_text)
-            
-            if url_dict:
-                url_filename = f"{self.filepath.stem}_yesterday_url.txt"
-                url_path = self.filepath.parent / url_filename
-                save_urls_to_file(url_dict, str(url_path), f"{self.filepath.stem} ({self.yesterday})")
-                print(f"   🔗 {len(url_dict)}개 URL 추출")
-        except Exception as e:
-            logger.error(f"URL extraction failed: {e}")
 
-
-class YesterdayBatchProcessor:
-    """디렉터리 내 모든 파일에서 어제 날짜 대화를 일괄 요약."""
+class TodayBatchProcessor:
+    """디렉터리 내 모든 파일에서 오늘 날짜 대화를 일괄 요약."""
     
     def __init__(self, directory: Path, provider: Optional[str] = None):
         self.directory = directory
         self.provider = provider
-        self.yesterday = get_yesterday_date()
+        self.today = get_today_date()
 
     def get_target_files(self) -> List[Path]:
         all_txt_files = list(self.directory.glob("*.txt"))
@@ -158,10 +144,10 @@ class YesterdayBatchProcessor:
             return
 
         print("="*60)
-        print("📅 어제 날짜 일괄 요약")
+        print("📅 오늘 날짜 일괄 요약")
         print("="*60)
         print(f"📂 디렉터리: {self.directory}")
-        print(f"📅 대상 날짜: {self.yesterday} (어제)")
+        print(f"📅 대상 날짜: {self.today} (오늘)")
         print(f"🤖 LLM: {config.get_provider_info().name}")
         print(f"📄 파일 수: {len(target_files)}개")
         print("="*60 + "\n")
@@ -169,7 +155,7 @@ class YesterdayBatchProcessor:
         results = []
         
         for filepath in target_files:
-            summarizer = YesterdaySummarizer(filepath, self.provider)
+            summarizer = TodaySummarizer(filepath, self.provider)
             success = summarizer.run()
             results.append((filepath.name, success))
             print()
@@ -254,7 +240,7 @@ def parse_args():
 
 def main():
     """메인 진입점 함수."""
-    yesterday = get_yesterday_date()
+    today = get_today_date()
     target, provider = parse_args()
     
     # LLM 제공자 설정
@@ -266,15 +252,15 @@ def main():
         config.set_provider(provider)
     
     print("="*50)
-    print(f"📅 어제 날짜({yesterday}) 대화 요약기")
+    print(f"📅 오늘 날짜({today}) 대화 요약기")
     print("="*50)
     
     # 명령줄 인자 없으면 대화형 모드
     if not target:
         print("Usage:")
-        print("  python yesterday_summarizer.py <file>")
-        print("  python yesterday_summarizer.py <directory>")
-        print("  python yesterday_summarizer.py --llm chatgpt <file>\n")
+        print("  python full_today_summary.py <file>")
+        print("  python full_today_summary.py <directory>")
+        print("  python full_today_summary.py --llm chatgpt <file>\n")
         
         # LLM 선택
         selected_provider = select_llm_provider()
@@ -296,13 +282,13 @@ def main():
                 
                 if choice.upper() == 'A':
                     prompt_api_key()
-                    processor = YesterdayBatchProcessor(data_dir, selected_provider)
+                    processor = TodayBatchProcessor(data_dir, selected_provider)
                     processor.run()
                     sys.exit(0)
                 elif choice.isdigit() and 1 <= int(choice) <= len(txt_files):
                     target_file = txt_files[int(choice)-1]
                     prompt_api_key()
-                    summarizer = YesterdaySummarizer(target_file, selected_provider)
+                    summarizer = TodaySummarizer(target_file, selected_provider)
                     summarizer.run()
                     sys.exit(0)
         sys.exit(1)
@@ -312,10 +298,10 @@ def main():
     prompt_api_key()
     
     if target_path.is_dir():
-        processor = YesterdayBatchProcessor(target_path, provider)
+        processor = TodayBatchProcessor(target_path, provider)
         processor.run()
     else:
-        summarizer = YesterdaySummarizer(target_path, provider)
+        summarizer = TodaySummarizer(target_path, provider)
         summarizer.run()
 
 

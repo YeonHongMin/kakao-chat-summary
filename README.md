@@ -8,6 +8,7 @@
 - 🤖 **다중 LLM 지원**: GLM, MiniMax Coding Plan, Perplexity 선택 가능
 - 🔗 **URL 자동 추출**: 요약본에서 공유된 링크를 별도 파일로 추출
 - 📝 **Markdown 리포트**: 깔끔한 Markdown 형식의 통합 리포트 생성
+- ⏰ **엇그제~오늘 요약**: 2일 전부터 오늘까지의 대화만 요약하는 스크립트
 - ⏰ **어제~오늘 요약**: 어제와 오늘 날짜 대화만 빠르게 요약하는 별도 스크립트
 - 🌅 **오늘만 요약**: 오늘 날짜 대화만 요약하는 전용 스크립트
 
@@ -70,29 +71,26 @@ export PERPLEXITY_API_KEY="your-perplexity-key"
 3. **텍스트로 저장** 선택
 4. 저장된 `.txt` 파일을 `data/` 폴더에 복사
 
-### 2. 전체 날짜 요약 (full_date_summary.py)
+### 2. 전체 날짜 요약 (full_date_summary.py / simple_date_summary.py)
 
 모든 날짜의 대화를 순차적으로 요약합니다. **단일 파일 또는 디렉터리 지원.**
 
 ```bash
-# 기본 LLM (GLM) 사용
+# 상세 요약 (full) - 기본 LLM (GLM)
 python src/full_date_summary.py data/채팅방.txt
+python src/full_date_summary.py --llm minimax data/
 
-# LLM 지정 (Perplexity 사용)
-python src/full_date_summary.py --llm perplexity data/채팅방.txt
+# 간결 요약 (simple, 음슴체)
+python src/simple_date_summary.py data/채팅방.txt
+python src/simple_date_summary.py --llm minimax data/
 
-# MiniMax Coding Plan 사용
-python src/full_date_summary.py --llm minimax data/채팅방.txt
-
-# 디렉터리 일괄 처리
-python src/full_date_summary.py --llm glm data/
-
-# 대화형 모드 (LLM 선택 + 파일 선택)
+# 대화형 모드
 python src/full_date_summary.py
 ```
 
 **출력 파일**:
-- `채팅방_summaries.md` - 날짜별 통합 요약 리포트
+- `채팅방_summaries.md` - 날짜별 통합 요약 리포트 (Full)
+- `채팅방_simple_summaries.md` - 날짜별 통합 요약 리포트 (Simple)
 - `채팅방_url.txt` - 추출된 URL 목록
 
 ### 3. 어제~오늘 요약 (full_yesterday_summary.py / simple_yesterday_summary.py)
@@ -113,7 +111,25 @@ python src/simple_yesterday_summary.py --llm minimax data/
 - `채팅방_full_summary.md` - 어제~오늘 상세 요약
 - `채팅방_simple_summary.md` - 어제~오늘 간결 요약
 
-### 4. 오늘만 요약 (full_today_summary.py / simple_today_summary.py)
+### 4. 2일(엇그제)~오늘 요약 (full_2days_summary.py / simple_2days_summary.py)
+
+**2일 전(엇그제)부터 오늘(현재 시점)까지**의 대화만 요약합니다.
+
+```bash
+# 상세 요약 (full)
+python src/full_2days_summary.py data/채팅방.txt
+python src/full_2days_summary.py --llm minimax data/
+
+# 간결 요약 (simple, 음슴체)
+python src/simple_2days_summary.py data/채팅방.txt
+python src/simple_2days_summary.py --llm minimax data/
+```
+
+**출력 파일**:
+- `채팅방_full_2days_summary.md` - 엇그제~오늘 상세 요약
+- `채팅방_simple_2days_summary.md` - 엇그제~오늘 간결 요약
+
+### 5. 오늘만 요약 (full_today_summary.py / simple_today_summary.py)
 
 **오늘 날짜(현재 시점까지)**의 대화만 요약합니다.
 
@@ -131,7 +147,7 @@ python src/simple_today_summary.py --llm minimax data/
 - `채팅방_full_today_summary.md` - 오늘 상세 요약
 - `채팅방_simple_today_summary.md` - 오늘 간결 요약
 
-### 5. URL만 추출 (url_extractor.py)
+### 6. URL만 추출 (url_extractor.py)
 
 이미 생성된 요약 파일에서 URL을 추출합니다.
 
@@ -151,11 +167,14 @@ kakao-chat-summary/
 │   ├── parser.py                    # 카카오톡 텍스트 파싱
 │   ├── llm_client.py                # 통합 LLM API 클라이언트
 │   ├── chat_processor.py            # 채팅 요약 처리
-│   ├── full_date_summary.py         # 전체 날짜 요약 (메인)
+│   ├── full_date_summary.py         # 전체 날짜 상세 요약 (메인)
+│   ├── simple_date_summary.py       # 전체 날짜 간결 요약 (음슴체)
 │   ├── full_yesterday_summary.py    # 어제~오늘 상세 요약
-│   ├── simple_yesterday_summary.py  # 어제~오늘 간결 요약 (음슴체)
+│   ├── simple_yesterday_summary.py  # 어제~오늘 간결 요약
+│   ├── full_2days_summary.py        # 엇그제~오늘 상세 요약
+│   ├── simple_2days_summary.py      # 엇그제~오늘 간결 요약
 │   ├── full_today_summary.py        # 오늘 상세 요약
-│   ├── simple_today_summary.py      # 오늘 간결 요약 (음슴체)
+│   ├── simple_today_summary.py      # 오늘 간결 요약
 │   └── url_extractor.py             # URL 추출
 │
 ├── data/                      # 입력/출력 파일 저장

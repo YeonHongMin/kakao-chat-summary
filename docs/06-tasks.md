@@ -13,6 +13,9 @@
 - [x] `full_date_summary.py` - 날짜별 요약 오케스트레이터
 - [x] `full_yesterday_summary.py` - 어제 날짜 요약
 - [x] `url_extractor.py` - URL 추출 모듈
+- [x] `simple_date_summary.py` - 전체 날짜 간결 요약
+- [x] `full_2days_summary.py` - 엇그제~오늘 상세 요약
+- [x] `simple_2days_summary.py` - 엇그제~오늘 간결 요약
 
 ### Phase 3: 다중 LLM 지원
 - [x] GLM (Z.AI) 지원
@@ -70,7 +73,12 @@
 
 ## 4. 버전 히스토리
 
-### v1.2.0 (현재)
+### v1.3.0 (현재)
+- 2일 전(엇그제)부터 오늘까지 요약 기능 추가 (`full_2days`, `simple_2days`)
+- 간결 요약(단답형/음슴체) 모드 확대 (전체 날짜/2일치)
+- 타임스탬프 기반의 정확한 메시지 카운팅 로직 개선
+
+### v1.2.0
 - 로그 시스템 고도화 (`logs/` 디렉터리, 파일 로깅)
 - 에러 처리 개선 (리포트 오염 방지)
 - MiniMax, Perplexity, GLM 연동 안정화

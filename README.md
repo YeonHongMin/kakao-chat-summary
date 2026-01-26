@@ -175,7 +175,11 @@ kakao-chat-summary/
 | `MINIMAX_API_KEY` | LLM별 | MiniMax Coding Plan API 키 |
 | `PERPLEXITY_API_KEY` | LLM별 | Perplexity API 키 |
 | `LLM_PROVIDER` | - | 기본 LLM 제공자 (기본: glm) |
-| `API_TIMEOUT` | - | API 타임아웃 초 (기본: 180) |
+| `API_TIMEOUT` | - | API 타임아웃 초 (기본: 600) |
+
+> 💡 **출력 토큰 제한**: LLM API 호출 시 `max_tokens`는 기본 **16000**으로 설정되어 있습니다. 긴 대화도 잘리지 않고 완전한 요약이 가능합니다.
+
+> 🚀 **스트리밍 모드**: API 호출 시 `stream=True`를 사용하여 응답이 도착하는 대로 처리합니다. 연결 타임아웃 60초, 읽기 타임아웃 300초로 분리되어 긴 응답도 안정적으로 수신됩니다.
 
 ---
 

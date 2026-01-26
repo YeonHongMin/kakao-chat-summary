@@ -58,7 +58,7 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
 class Config:
     """애플리케이션 설정을 관리하는 싱글톤 클래스."""
     
-    DEFAULT_TIMEOUT = 180
+    DEFAULT_TIMEOUT = 600
     DEFAULT_PROVIDER = "glm"
 
     PROMPT_TEMPLATE = """다음은 카카오톡 오픈채팅방의 대화 내용입니다.

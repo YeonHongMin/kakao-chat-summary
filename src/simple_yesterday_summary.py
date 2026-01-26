@@ -213,16 +213,11 @@ class SimpleParser:
                 current_date = f"{year}-{int(month):02d}-{int(day):02d}"
                 if current_date not in messages_by_date:
                     messages_by_date[current_date] = []
-            elif current_date and self._is_message_line(line):
+            elif current_date:
                 messages_by_date[current_date].append(line)
                 total_messages += 1
         
         return ParseResult(messages_by_date, total_messages)
-    
-    def _is_message_line(self, line: str) -> bool:
-        import re
-        # [닉네임] [시간] 메시지 패턴
-        return bool(re.match(r'\[.+?\]\s*\[.+?\]', line))
 
 
 # ============================================================
@@ -254,25 +249,29 @@ class SimpleLLMClient:
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7,
-            "max_tokens": 2000
+            "max_tokens": 16000
         }
         
         try:
+            # 스트리밍으로 응답 받기 (연결 60초, 읽기 300초)
             response = requests.post(
                 self.provider.api_url,
                 headers=headers,
                 json=payload,
-                timeout=config.api_timeout
+                timeout=(60, 300),
+                stream=True
             )
             response.raise_for_status()
-            result = response.json()
+            content_text = response.content.decode('utf-8')
+            import json
+            result = json.loads(content_text)
             content = result["choices"][0]["message"]["content"]
             result_text = self._strip_think_tags(content)
             return result_text
         except requests.exceptions.RequestException as e:
             logger.error(f"API request failed: {e}")
             return f"[ERROR] API 요청 실패: {e}"
-        except (KeyError, IndexError) as e:
+        except (KeyError, IndexError, json.JSONDecodeError) as e:
             logger.error(f"Response parsing failed: {e}")
             return f"[ERROR] 응답 파싱 실패: {e}"
 

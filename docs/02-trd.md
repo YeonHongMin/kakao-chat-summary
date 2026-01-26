@@ -60,8 +60,10 @@
 **클래스**: `LLMClient`
 
 **API 호환성**: OpenAI 호환 API 형식만 지원
-- 요청 형식: `{"model": "...", "messages": [{"role": "user", "content": "..."}]}`
+- 요청 형식: `{"model": "...", "messages": [{"role": "user", "content": "..."}], "max_tokens": 16000}`
 - 응답 형식: `{"choices": [{"message": {"content": "..."}}], "usage": {...}}`
+- **max_tokens**: 기본 **16000**으로 설정되어 긴 대화도 완전한 요약 가능
+- **스트리밍 모드**: `stream=True`로 응답을 즉시 처리, 타임아웃 `(60, 300)` (연결/읽기)
 - **Rate Limit**: ChatGPT의 경우 분당 3회 요청 제한을 준수하기 위해 요청 간 21초 대기 로직이 포함되어 있습니다.
 
 | 메서드 | 반환 타입 | 설명 |

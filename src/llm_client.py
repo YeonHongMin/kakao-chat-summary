@@ -84,7 +84,7 @@ class LLMClient:
 
         payload = {
             "model": self.provider_info.model,
-            "max_tokens": 4000,
+            "max_tokens": 16000,
             "temperature": 0.5,
             "messages": [
                 {"role": "user", "content": config.PROMPT_TEMPLATE.format(text=text)}
@@ -98,11 +98,13 @@ class LLMClient:
             if config.current_provider == "chatgpt":
                 LLMClient._last_chatgpt_request_time = time.time()
             
+            # 스트리밍으로 응답 받기 (연결 60초, 읽기 300초)
             response = requests.post(
                 self.provider_info.api_url, 
                 headers=headers, 
                 json=payload, 
-                timeout=config.api_timeout
+                timeout=(60, 300),  # (connect_timeout, read_timeout)
+                stream=True
             )
             
             if response.status_code != 200:
@@ -110,7 +112,9 @@ class LLMClient:
                 self.logger.error(error_msg)
                 return {"success": False, "error": error_msg}
             
-            return self._parse_response(response.json())
+            # 스트리밍 응답을 한번에 읽음
+            content = response.content.decode('utf-8')
+            return self._parse_response_text(content)
             
         except requests.exceptions.Timeout:
             self.logger.error("Request timed out.")
@@ -145,6 +149,22 @@ class LLMClient:
             return {
                 "success": False,
                 "error": f"Response parsing failed: {e}"
+            }
+
+    def _parse_response_text(self, text: str) -> Dict[str, Any]:
+        """
+        스트리밍 응답 텍스트를 JSON으로 파싱합니다.
+        """
+        import json
+        try:
+            data = json.loads(text)
+            return self._parse_response(data)
+        except json.JSONDecodeError as e:
+            self.logger.error(f"JSON parsing failed: {e}")
+            self.logger.error(f"Response text: {text[:500]}...")
+            return {
+                "success": False,
+                "error": f"JSON parsing failed: {e}"
             }
 
 

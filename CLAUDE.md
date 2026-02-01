@@ -14,7 +14,7 @@
 | **언어** | Python 3.11+ |
 | **GUI** | PySide6 (Qt for Python) |
 | **DB** | SQLite + SQLAlchemy ORM |
-| **버전** | v2.2.0 |
+| **버전** | v2.2.2 |
 | **최종 업데이트** | 2026-02-01 |
 
 ---
@@ -213,7 +213,7 @@ class URL(Base):
 
 ### 2. LLM 요약 생성
 - **지원 LLM**: Z.AI GLM, OpenAI GPT-4o-mini, MiniMax, Perplexity
-- **요약 옵션**: 전체 날짜, 요약 안된 날짜만, 대기 중인 날짜만
+- **요약 옵션**: 전체 날짜, 요약 안된 날짜만 (요약 파일 존재 여부 기반), 날짜 범위 선택
 - **응답 검증**: finish_reason, 최소 길이, 필수 섹션, 잘림 패턴
 - **진행 상황**: 실시간 진행률, 취소 가능
 
@@ -286,7 +286,8 @@ get_available_dates(room_name) -> List[str]
 save_daily_summary(room_name, date_str, content, llm) -> Path
 load_daily_summary(room_name, date_str) -> str
 get_summarized_dates(room_name) -> List[str]
-invalidate_summary_if_updated(room_name, date, old_count, new_count)
+get_dates_needing_summary(room_name) -> Dict[str, str]  # 요약 파일 존재 여부만 확인
+invalidate_summary_if_updated(room_name, date, old_count, new_count)  # 업로드 시 메시지 수 비교로 요약 삭제
 
 # URL (3개 파일)
 save_url_lists(room_name, urls_recent, urls_weekly, urls_all)
@@ -369,6 +370,32 @@ python src/app.py
 
 ---
 
+## 🐛 트러블슈팅 히스토리
+
+### v2.2.2 - 요약 파일 ↔ DB 동기화 버그 (2026-02-01)
+
+**증상**: LLM 요약 생성 후 대시보드에 요약이 표시되지 않음
+
+**원인 3가지**:
+1. **SummaryGeneratorWorker가 파일에만 저장** (`main_window.py` ~826행)
+   - `storage.save_daily_summary()`만 호출하고 `db.add_summary()`는 호출하지 않았음
+   - 대시보드는 DB에서 요약 목록을 읽으므로 불일치 발생
+2. **RecoveryWorker date 타입 버그** (`main_window.py` ~916행)
+   - `db.add_summary()`에 `date_str` (문자열)을 전달 → `date` 객체 필요
+3. **RecoveryWorker 요약 내용 500자 잘림** (`main_window.py` ~920행)
+   - `summary_content[:500]`으로 잘라서 저장 → 전체 내용 손실
+
+**수정**:
+1. SummaryGeneratorWorker에서 파일 저장 직후 `db.delete_summary()` + `db.add_summary()` 호출 추가
+2. RecoveryWorker에서 `datetime.strptime(date_str, '%Y-%m-%d').date()` 변환 적용
+3. `summary_content[:500]` → `summary_content` 전체 저장으로 변경
+4. `database.py`에 `delete_summary(room_id, summary_date)` 메서드 신규 추가
+
+**설계 원칙**: 요약 필요 여부는 **파일 존재 여부**로 판단 (`get_dates_needing_summary`, `get_summarized_dates`).
+DB에 데이터가 있어도 파일이 없으면 재수집 대상이며, DB 저장 시 기존 행을 삭제 후 추가하여 중복 방지.
+
+---
+
 ## 📚 관련 문서
 
 | 파일 | 내용 |
@@ -382,4 +409,4 @@ python src/app.py
 
 ---
 
-*마지막 업데이트: 2026-02-01 | 버전: v2.2.0*
+*마지막 업데이트: 2026-02-01 | 버전: v2.2.2*

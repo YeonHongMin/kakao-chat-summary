@@ -715,6 +715,7 @@ class SummaryGeneratorWorker(QThread):
             from chat_processor import ChatProcessor
             from full_config import config
             from datetime import datetime, timedelta
+            from db import get_db
             
             self.progress.emit(10, "데이터 로드 중...")
             
@@ -737,14 +738,11 @@ class SummaryGeneratorWorker(QThread):
                 dates_needing_summary = self.storage.get_dates_needing_summary(self.room_name)
                 dates_to_process = list(dates_needing_summary.keys())
                 
-                new_count = len([d for d, r in dates_needing_summary.items() if r == "new"])
-                updated_count = len([d for d, r in dates_needing_summary.items() if r == "updated"])
-                
                 if not dates_to_process:
                     self.finished.emit(True, "✅ 모든 날짜가 이미 요약되어 있습니다.")
                     return
-                
-                self.progress.emit(15, f"🎯 신규 {new_count}일 + 갱신 {updated_count}일 요약 예정")
+
+                self.progress.emit(15, f"🎯 신규 {len(dates_to_process)}일 요약 예정")
                 skipped_count = len(messages_by_date) - len(dates_to_process)
             else:
                 # 날짜 범위 계산
@@ -829,6 +827,17 @@ class SummaryGeneratorWorker(QThread):
                     self.storage.save_daily_summary(
                         self.room_name, date_str, summary, llm_provider
                     )
+                    # DB에도 저장 (기존 요약 삭제 후 추가)
+                    try:
+                        db = get_db()
+                        summary_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                        db.delete_summary(self.room_id, summary_date)
+                        db.add_summary(
+                            self.room_id, summary_date, "daily",
+                            summary, llm_provider
+                        )
+                    except Exception:
+                        pass  # 파일 저장은 성공했으므로 DB 실패는 무시
                     all_summaries.append(f"## 📅 {date_str}\n\n{summary}")
                     success_count += 1
                 else:
@@ -916,11 +925,13 @@ class RecoveryWorker(QThread):
                     summary_content = self.storage.load_daily_summary(room_name, date_str)
                     if summary_content:
                         try:
+                            from datetime import datetime as dt_cls
+                            summary_date_obj = dt_cls.strptime(date_str, '%Y-%m-%d').date()
                             db.add_summary(
                                 room.id,
-                                date_str,
+                                summary_date_obj,
                                 "daily",
-                                summary_content[:500] if summary_content else ""
+                                summary_content if summary_content else ""
                             )
                             total_summaries += 1
                         except Exception:
@@ -1973,8 +1984,8 @@ class MainWindow(QMainWindow):
         
         # 요약 필요한 날짜 조회
         dates_needing_summary = storage.get_dates_needing_summary(room_name)
-        new_count = len([d for d, r in dates_needing_summary.items() if r == "new"])
-        needs_update_count = len([d for d, r in dates_needing_summary.items() if r == "updated"])
+        new_count = len(dates_needing_summary)
+        needs_update_count = 0
         
         # 현재 LLM 설정 가져오기
         from full_config import config

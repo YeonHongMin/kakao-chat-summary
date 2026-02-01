@@ -246,6 +246,15 @@ class Database:
                 query = query.filter(Summary.summary_type == summary_type)
             return query.order_by(Summary.summary_date.desc()).all()
     
+    def delete_summary(self, room_id: int, summary_date: date) -> bool:
+        """특정 날짜의 요약 삭제."""
+        with self.get_session() as session:
+            deleted = session.query(Summary).filter(
+                Summary.room_id == room_id,
+                Summary.summary_date == summary_date
+            ).delete()
+            return deleted > 0
+
     # ==================== SyncLog 관련 ====================
     
     def add_sync_log(self, room_id: int, status: str, 

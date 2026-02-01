@@ -252,32 +252,23 @@ class FileStorage:
     def get_dates_needing_summary(self, room_name: str) -> Dict[str, str]:
         """
         요약이 필요한 날짜 목록 반환.
-        
+
+        요약 파일이 없는 날짜만 "new"로 반환.
+        메시지가 추가된 경우는 업로드 시 invalidate_summary_if_updated()에서
+        요약 파일을 삭제하므로, 여기서는 존재 여부만 확인하면 됨.
+
         Returns:
             Dict[date_str, reason]: 날짜별 요약 필요 사유
             - "new": 새로운 날짜 (요약 없음)
-            - "updated": 원본이 업데이트됨 (재요약 필요)
         """
         result = {}
         original_dates = self.get_available_dates(room_name)
         summarized_dates = set(self.get_summarized_dates(room_name))
-        
+
         for date_str in original_dates:
             if date_str not in summarized_dates:
                 result[date_str] = "new"
-            else:
-                # 원본과 요약의 수정 시간 비교
-                original_path = self._get_original_path(room_name, date_str)
-                summary_path = self._get_summary_path(room_name, date_str)
-                
-                if original_path.exists() and summary_path.exists():
-                    original_mtime = original_path.stat().st_mtime
-                    summary_mtime = summary_path.stat().st_mtime
-                    
-                    # 원본이 요약보다 새로우면 재요약 필요
-                    if original_mtime > summary_mtime:
-                        result[date_str] = "updated"
-        
+
         return result
     
     def invalidate_summary_if_updated(self, room_name: str, date_str: str, 

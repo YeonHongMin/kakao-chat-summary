@@ -305,7 +305,7 @@ class ChatRoomWidget(QFrame):
 
 class DashboardCard(QFrame):
     """대시보드 카드 위젯."""
-    
+
     def __init__(self, title: str, value: str, subtext: str = "", icon: str = "📊"):
         super().__init__()
         self.setProperty("class", "DashboardCard")
@@ -313,39 +313,45 @@ class DashboardCard(QFrame):
             QFrame {
                 background-color: #FFFFFF;
                 border: 1px solid #E8E8E8;
-                border-radius: 12px;
-                padding: 15px;
+                border-radius: 10px;
+                padding: 8px 12px;
             }
             QFrame:hover {
                 border-color: #FEE500;
             }
         """)
-        
+
         layout = QVBoxLayout(self)
-        layout.setSpacing(8)
-        
-        # 아이콘 + 제목
+        layout.setSpacing(2)
+        layout.setContentsMargins(4, 4, 4, 4)
+
+        # 아이콘 + 제목 + 값을 한 줄로
         header = QHBoxLayout()
+        header.setSpacing(6)
         icon_label = QLabel(icon)
-        icon_label.setStyleSheet("font-size: 20px;")
+        icon_label.setStyleSheet("font-size: 14px;")
         header.addWidget(icon_label)
-        
+
         title_label = QLabel(title)
-        title_label.setStyleSheet("font-size: 12px; color: #666666;")
+        title_label.setStyleSheet("font-size: 11px; color: #666666;")
         header.addWidget(title_label)
         header.addStretch()
+
+        self.value_label = QLabel(value)
+        self.value_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #3C1E1E;")
+        header.addWidget(self.value_label)
         layout.addLayout(header)
-        
-        # 값
-        value_label = QLabel(value)
-        value_label.setStyleSheet("font-size: 28px; font-weight: bold; color: #3C1E1E;")
-        layout.addWidget(value_label)
-        
+
         # 서브텍스트
+        self.sub_label = QLabel(subtext)
+        self.sub_label.setStyleSheet("font-size: 10px; color: #888888;")
+        layout.addWidget(self.sub_label)
+
+    def update_card(self, value: str, subtext: str = ""):
+        """카드 값과 서브텍스트 업데이트."""
+        self.value_label.setText(value)
         if subtext:
-            sub_label = QLabel(subtext)
-            sub_label.setStyleSheet("font-size: 11px; color: #888888;")
-            layout.addWidget(sub_label)
+            self.sub_label.setText(subtext)
 
 
 class SummaryOptionsDialog(QDialog):
@@ -678,6 +684,64 @@ class SummaryProgressDialog(QDialog):
         """)
         self.cancel_btn.clicked.disconnect()
         self.cancel_btn.clicked.connect(self.accept)
+
+
+class SummaryProgressWidget(QWidget):
+    """상태바 내장 요약 프로그레스 위젯 (비모달)."""
+    cancel_requested = Signal()
+
+    def __init__(self, parent=None, llm_name: str = "LLM", room_name: str = ""):
+        super().__init__(parent)
+        self.room_name = room_name
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(6)
+
+        self.icon_label = QLabel("🤖")
+        self.icon_label.setStyleSheet("font-size: 14px;")
+        layout.addWidget(self.icon_label)
+
+        self.message_label = QLabel(f"[{room_name}] {llm_name} 요약 중...")
+        self.message_label.setStyleSheet("font-size: 12px; color: #191919;")
+        layout.addWidget(self.message_label)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFixedWidth(120)
+        self.progress_bar.setFixedHeight(16)
+        self.progress_bar.setObjectName("summaryProgressBar")
+        layout.addWidget(self.progress_bar)
+
+        self.cancel_btn = QPushButton("❌")
+        self.cancel_btn.setToolTip("요약 취소")
+        self.cancel_btn.setFixedSize(24, 24)
+        self.cancel_btn.setObjectName("summaryProgressCancelBtn")
+        self.cancel_btn.clicked.connect(self._on_cancel)
+        layout.addWidget(self.cancel_btn)
+
+        self.setObjectName("summaryProgressWidget")
+
+    def _on_cancel(self):
+        """취소 버튼 클릭."""
+        self.cancel_btn.setEnabled(False)
+        self.message_label.setText(f"[{self.room_name}] 취소 중...")
+        self.cancel_requested.emit()
+
+    @Slot(int, str)
+    def update_progress(self, progress: int, message: str):
+        """진행 상황 업데이트."""
+        self.progress_bar.setValue(progress)
+        self.message_label.setText(f"[{self.room_name}] {message}")
+
+    def set_completed(self, success: bool, message: str):
+        """완료 상태 표시."""
+        self.progress_bar.setValue(100)
+        self.cancel_btn.setVisible(False)
+        icon = "✅" if success else "❌"
+        self.icon_label.setText(icon)
+        self.message_label.setText(message)
 
 
 class SummaryGeneratorWorker(QThread):
@@ -1192,6 +1256,9 @@ class MainWindow(QMainWindow):
         self.summary_worker: Optional[SummaryGeneratorWorker] = None
         self.recovery_worker: Optional[RecoveryWorker] = None
         self.progress_dialog: Optional[SummaryProgressDialog] = None
+        self.summary_progress_widget: Optional[SummaryProgressWidget] = None
+        self._summary_in_progress: bool = False
+        self.summary_source_room_id: Optional[int] = None
         
         self._setup_ui()
         self._setup_menu()
@@ -1334,7 +1401,7 @@ class MainWindow(QMainWindow):
         # 대시보드 카드 영역
         cards_widget = QWidget()
         cards_layout = QHBoxLayout(cards_widget)
-        cards_layout.setContentsMargins(10, 10, 10, 10)
+        cards_layout.setContentsMargins(10, 5, 10, 5)
         
         self.card_messages = DashboardCard("총 메시지", "0", "전체 기간", "💬")
         self.card_participants = DashboardCard("참여자", "0", "명", "👥")
@@ -1593,7 +1660,7 @@ class MainWindow(QMainWindow):
         self.url_status_label = QLabel("")
         self.url_status_label.setStyleSheet("border: none; color: #888; font-size: 11px;")
         url_header_layout.addWidget(self.url_status_label)
-        
+
         # 동기화 버튼 (요약에서 URL 추출 → DB/파일 저장)
         self.sync_url_btn = QPushButton("🔄 동기화")
         self.sync_url_btn.setToolTip("요약 파일에서 URL을 추출하여 DB와 파일에 저장")
@@ -1611,7 +1678,7 @@ class MainWindow(QMainWindow):
         """)
         self.sync_url_btn.clicked.connect(self._sync_url_from_summaries)
         url_header_layout.addWidget(self.sync_url_btn)
-        
+
         # 파일에서 복구 버튼
         self.restore_url_btn = QPushButton("📂 파일 복구")
         self.restore_url_btn.setToolTip("파일에서 URL 목록을 DB로 복구")
@@ -1629,7 +1696,7 @@ class MainWindow(QMainWindow):
         """)
         self.restore_url_btn.clicked.connect(self._restore_url_from_file)
         url_header_layout.addWidget(self.restore_url_btn)
-        
+
         url_layout.addWidget(url_header)
         
         # URL 목록 뷰어
@@ -1659,7 +1726,59 @@ class MainWindow(QMainWindow):
         url_layout.addWidget(url_frame, 1)
         
         self.tab_widget.addTab(url_tab, "🔗 URL 정보")
-        
+
+        # === 기타 기능 탭 ===
+        etc_tab = QWidget()
+        etc_layout = QVBoxLayout(etc_tab)
+        etc_layout.setSpacing(12)
+        etc_layout.setContentsMargins(10, 10, 10, 10)
+
+        # 통계 갱신 카드
+        stats_card = QFrame()
+        stats_card.setStyleSheet("""
+            QFrame {
+                background-color: #FFFFFF;
+                border: 1px solid #E8E8E8;
+                border-radius: 12px;
+            }
+        """)
+        stats_card_layout = QVBoxLayout(stats_card)
+        stats_card_layout.setContentsMargins(15, 12, 15, 12)
+
+        stats_title = QLabel("📊 통계 정보 갱신")
+        stats_title.setStyleSheet("border: none; font-size: 15px; font-weight: bold;")
+        stats_card_layout.addWidget(stats_title)
+
+        stats_desc = QLabel("대시보드 통계와 채팅방 목록을 최신 상태로 갱신합니다.")
+        stats_desc.setStyleSheet("border: none; color: #666; font-size: 12px;")
+        stats_desc.setWordWrap(True)
+        stats_card_layout.addWidget(stats_desc)
+
+        stats_btn_layout = QHBoxLayout()
+        stats_btn_layout.addStretch()
+        self.etc_refresh_btn = QPushButton("🔄 갱신")
+        self.etc_refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1E88E5;
+                color: white;
+                padding: 6px 18px;
+                border-radius: 6px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #1565C0;
+            }
+        """)
+        self.etc_refresh_btn.clicked.connect(self._on_refresh_stats)
+        stats_btn_layout.addWidget(self.etc_refresh_btn)
+        stats_card_layout.addLayout(stats_btn_layout)
+
+        etc_layout.addWidget(stats_card)
+
+        etc_layout.addStretch()
+
+        self.tab_widget.addTab(etc_tab, "🔧 기타")
+
         right_layout.addWidget(self.tab_widget, 1)
         
         splitter.addWidget(right_panel)
@@ -1704,13 +1823,19 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(summary_action)
         
         tools_menu.addSeparator()
-        
-        recovery_action = QAction("🔧 DB 복구...", self)
+
+        recovery_action = QAction("🗄️ DB 전체 복구...", self)
+        recovery_action.setToolTip("기존 DB를 삭제하고 data/original, data/summary 파일에서 재구축")
         recovery_action.triggered.connect(self._on_recovery)
         tools_menu.addAction(recovery_action)
-        
+
+        room_recovery_action = QAction("💬 채팅방 복구...", self)
+        room_recovery_action.setToolTip("파일 디렉터리에 있지만 DB에 없는 채팅방을 복구")
+        room_recovery_action.triggered.connect(self._on_room_recovery)
+        tools_menu.addAction(room_recovery_action)
+
         tools_menu.addSeparator()
-        
+
         settings_action = QAction("설정...", self)
         settings_action.setShortcut("Ctrl+,")
         settings_action.triggered.connect(self._on_settings)
@@ -1781,6 +1906,7 @@ class MainWindow(QMainWindow):
         """채팅방 선택 시."""
         self.current_room_id = room_id
         self.current_room_file = file_path
+
         
         # 채팅방 통계 로드
         stats = self.db.get_room_stats(room_id)
@@ -1789,16 +1915,37 @@ class MainWindow(QMainWindow):
         if stats:
             room_name = stats.get('room_name', '채팅방')
             self.header_label.setText(f"📊 {room_name}")
-            
+
+            # 대화 기간 서브텍스트
+            first_date = stats.get('first_date')
+            last_date = stats.get('last_date')
+            if first_date and last_date:
+                days_span = (last_date - first_date).days + 1
+                msg_date_sub = f"{first_date} ~ {last_date} ({days_span}일)"
+            else:
+                msg_date_sub = "대화 없음"
+
             # 대시보드 카드 업데이트
-            self.card_messages.findChild(QLabel, "").setText(f"{stats.get('total_messages', 0):,}")
-            self.card_participants.findChild(QLabel, "").setText(f"{stats.get('unique_senders', 0)}")
-            
+            total_msg = stats.get('total_messages', 0)
+            self.card_messages.update_card(f"{total_msg:,}", msg_date_sub)
+            self.card_participants.update_card(
+                f"{stats.get('unique_senders', 0)}",
+                "명"
+            )
+
             # 파일 저장소에서 요약 통계 가져오기
             from file_storage import get_storage
             storage = get_storage()
+            available_dates = storage.get_available_dates(room_name)
             summarized_dates = storage.get_summarized_dates(room_name)
-            self.card_summaries.findChild(QLabel, "").setText(f"{len(summarized_dates)}")
+            total_dates = len(available_dates)
+            done_dates = len(summarized_dates)
+            if total_dates > 0:
+                pct = int(done_dates / total_dates * 100)
+                summary_sub = f"{done_dates}/{total_dates}일 ({pct}%)"
+            else:
+                summary_sub = "대화 데이터 없음"
+            self.card_summaries.update_card(f"{done_dates}", summary_sub)
             
             # 요약 목록 조회
             summaries = self.db.get_summaries_by_room(room_id)
@@ -2009,35 +2156,39 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_generate_summary(self):
         """요약 생성."""
+        if self._summary_in_progress:
+            QMessageBox.warning(self, "알림", "이미 요약이 진행 중입니다.\n완료 후 다시 시도하세요.")
+            return
+
         if self.current_room_id is None:
             QMessageBox.warning(self, "알림", "먼저 채팅방을 선택하세요.")
             return
-        
+
         # 현재 채팅방 이름 가져오기
         room_name = "Unknown"
         if self.current_room_id:
             room = self.db.get_room_by_id(self.current_room_id)
             if room:
                 room_name = room.name
-        
+
         # 통계 조회
         from file_storage import get_storage
         storage = get_storage()
         available_dates = storage.get_available_dates(room_name)
         summarized_dates = storage.get_summarized_dates(room_name)
-        
+
         # 요약 필요한 날짜 조회
         dates_needing_summary = storage.get_dates_needing_summary(room_name)
         new_count = len(dates_needing_summary)
         needs_update_count = 0
-        
+
         # 현재 LLM 설정 가져오기
         from full_config import config
         current_llm = config.current_provider
-        
-        # 요약 옵션 다이얼로그
+
+        # 요약 옵션 다이얼로그 (모달 OK - 옵션 선택은 차단이 자연스럽다)
         dialog = SummaryOptionsDialog(
-            self, 
+            self,
             summarized_count=len(summarized_dates),
             total_count=len(available_dates),
             needs_update_count=needs_update_count,
@@ -2047,73 +2198,81 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted:
             return
 
-        # 즉시 로딩 상태 표시
-        self.generate_btn.setEnabled(False)
-        self._update_status("⏳ 요약 준비 중...", "working")
-        QApplication.processEvents()
-
         summary_type = dialog.summary_type
         skip_existing = dialog.skip_existing
         selected_llm = dialog.selected_llm
         llm_display_name = dialog.llm_combo.currentText()
-        
-        # 처리할 날짜 수 계산
-        if summary_type == "pending":
-            total_dates = new_count + needs_update_count
-        elif summary_type == "all":
-            total_dates = len(available_dates) if not skip_existing else len(available_dates) - len(summarized_dates)
-        else:
-            total_dates = 3  # today, yesterday, 2days
-        
-        # 프로그레스 다이얼로그 생성
-        self.progress_dialog = SummaryProgressDialog(
-            self, 
-            llm_name=llm_display_name,
-            total_dates=max(total_dates, 1)
+
+        # 상태 플래그 설정
+        self._summary_in_progress = True
+        self.summary_source_room_id = self.current_room_id
+        self.generate_btn.setEnabled(False)
+
+        # 상태바에 프로그레스 위젯 삽입
+        self.summary_progress_widget = SummaryProgressWidget(
+            self, llm_name=llm_display_name, room_name=room_name
         )
-        
-        # 프로그레스 표시
+        self.statusbar.insertPermanentWidget(0, self.summary_progress_widget)
+        self.summary_progress_widget.show()
+
         self._update_status(f"⏳ {llm_display_name} 요약 생성 중...", "working")
 
         # 백그라운드 워커 시작
         self.summary_worker = SummaryGeneratorWorker(
-            self.current_room_id, 
+            self.current_room_id,
             summary_type,
             self.current_room_file,
             room_name,
             skip_existing,
             selected_llm
         )
-        
+
         # 시그널 연결
-        self.summary_worker.progress.connect(self.progress_dialog.update_progress)
+        self.summary_worker.progress.connect(self.summary_progress_widget.update_progress)
         self.summary_worker.progress.connect(lambda p, m: self._update_status(m, "working"))
         self.summary_worker.finished.connect(self._on_summary_finished)
-        self.progress_dialog.cancel_requested.connect(self.summary_worker.cancel)
-        
-        # 워커 시작 및 다이얼로그 표시
+        self.summary_progress_widget.cancel_requested.connect(self.summary_worker.cancel)
+
+        # 워커 시작
         self.summary_worker.start()
-        self.progress_dialog.show()
     
     @Slot(bool, str)
     def _on_summary_finished(self, success: bool, result: str):
         """요약 생성 완료."""
         self.generate_btn.setEnabled(True)
-        
-        # 프로그레스 다이얼로그 완료 처리
-        if hasattr(self, 'progress_dialog') and self.progress_dialog:
-            self.progress_dialog.complete(success)
-        
+        self._summary_in_progress = False
+
+        # 요약 대상 채팅방 이름 조회
+        summary_room_name = ""
+        if self.summary_source_room_id:
+            room = self.db.get_room_by_id(self.summary_source_room_id)
+            if room:
+                summary_room_name = room.name
+
+        # 상태바 프로그레스 위젯 제거
+        if self.summary_progress_widget:
+            self.statusbar.removeWidget(self.summary_progress_widget)
+            self.summary_progress_widget.deleteLater()
+            self.summary_progress_widget = None
+
         if success:
-            self._update_status("요약 생성 완료", "success")
-            # 요약 표시
-            self.summary_browser.setHtml(f"""
-                <h3>📝 AI 요약</h3>
-                <div style="line-height: 1.6;">{result.replace(chr(10), '<br>')}</div>
-            """)
+            # 현재 보고 있는 채팅방이 요약 대상 채팅방과 같으면 대시보드 갱신
+            if self.current_room_id == self.summary_source_room_id:
+                self._update_status("요약 생성 완료", "success")
+                self.summary_browser.setHtml(f"""
+                    <h3>📝 AI 요약</h3>
+                    <div style="line-height: 1.6;">{result.replace(chr(10), '<br>')}</div>
+                """)
+                # 대시보드 통계도 갱신
+                if self.current_room_id:
+                    self._on_room_selected(self.current_room_id, self.current_room_file or "")
+            else:
+                self._update_status(f"✅ [{summary_room_name}] 요약 완료", "success")
         else:
-            self._update_status("요약 생성 실패", "error")
+            self._update_status(f"요약 생성 실패: {summary_room_name}", "error")
             QMessageBox.warning(self, "요약 실패", result)
+
+        self.summary_source_room_id = None
     
     @Slot()
     def _on_recovery(self):
@@ -2159,6 +2318,66 @@ class MainWindow(QMainWindow):
             self._update_status("DB 복구 실패", "error")
             QMessageBox.warning(self, "복구 실패", message)
     
+    @Slot()
+    def _on_room_recovery(self):
+        """파일 디렉터리에서 누락된 채팅방 복구 (비파괴적)."""
+        self._update_status("채팅방 복구 스캔 중...", "working")
+
+        storage = get_storage()
+        file_rooms = storage.get_all_rooms()
+
+        # DB에 이미 있는 채팅방 이름 목록
+        db_rooms = self.db.get_all_rooms()
+        db_room_names = {r.name for r in db_rooms}
+
+        # 파일에는 있지만 DB에 없는 채팅방
+        missing = [name for name in file_rooms if name not in db_room_names]
+
+        if not missing:
+            self._update_status("채팅방 복구 불필요", "success")
+            QMessageBox.information(
+                self, "채팅방 복구",
+                "✅ 모든 채팅방이 DB에 존재합니다.\n누락된 채팅방이 없습니다."
+            )
+            return
+
+        reply = QMessageBox.question(
+            self, "채팅방 복구",
+            f"📂 파일에는 있지만 DB에 없는 채팅방 {len(missing)}개를 발견했습니다:\n\n"
+            + "\n".join(f"  • {name}" for name in missing)
+            + "\n\nDB에 추가하시겠습니까?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+
+        if reply != QMessageBox.Yes:
+            self._update_status("채팅방 복구 취소", "info")
+            return
+
+        created = 0
+        for name in missing:
+            try:
+                self.db.create_room(name)
+                created += 1
+            except Exception:
+                pass
+
+        self._update_status(f"채팅방 {created}개 복구 완료", "success")
+        self._load_rooms()
+        QMessageBox.information(
+            self, "채팅방 복구 완료",
+            f"✅ {created}개 채팅방을 DB에 추가했습니다."
+        )
+
+    @Slot()
+    def _on_refresh_stats(self):
+        """통계 정보 갱신."""
+        self._update_status("통계 갱신 중...", "working")
+        self._load_rooms()
+        if self.current_room_id:
+            self._on_room_selected(self.current_room_id, self.current_room_file)
+        self._update_status("통계 갱신 완료", "success")
+
     @Slot()
     def _on_settings(self):
         """설정 다이얼로그."""
@@ -2667,13 +2886,31 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "복구 실패", "파일에 URL이 없습니다.")
             self._update_status("URL 복구 실패", "error")
     
+    def closeEvent(self, event):
+        """앱 종료 시 진행 중인 요약 처리."""
+        if self._summary_in_progress and self.summary_worker:
+            reply = QMessageBox.question(
+                self, "종료 확인",
+                "요약이 진행 중입니다. 취소하고 종료하시겠습니까?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                event.ignore()
+                return
+            self.summary_worker.cancel()
+            self.summary_worker.wait(5000)
+        event.accept()
+
     @Slot()
     def _on_about(self):
         """정보 다이얼로그."""
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.0.0</p>
+            <p>버전 2.3.1</p>
             <p>카카오톡 대화를 분석하고 AI로 요약하는 도구입니다.</p>
-            <p>© 2026 KakaoTalk Chat Summary</p>"""
+            <p>제작자: 민연홍<br>
+            <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>
+            <p>&copy; 2026 KakaoTalk Chat Summary</p>"""
         )

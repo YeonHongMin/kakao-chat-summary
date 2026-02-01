@@ -218,21 +218,27 @@ class FileStorage:
     # ==================== 채팅방 관리 ====================
     
     def get_all_rooms(self) -> List[str]:
-        """모든 채팅방 목록."""
+        """모든 채팅방 목록 (original, summary, url 디렉터리 스캔)."""
         rooms = set()
-        
+
         # original 디렉토리에서
         if self.original_dir.exists():
             for d in self.original_dir.iterdir():
                 if d.is_dir():
                     rooms.add(d.name)
-        
+
         # summary 디렉토리에서
         if self.summary_dir.exists():
             for d in self.summary_dir.iterdir():
                 if d.is_dir():
                     rooms.add(d.name)
-        
+
+        # url 디렉토리에서
+        if self.url_dir.exists():
+            for d in self.url_dir.iterdir():
+                if d.is_dir():
+                    rooms.add(d.name)
+
         return sorted(rooms)
     
     def get_room_stats(self, room_name: str) -> Dict:

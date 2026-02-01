@@ -44,7 +44,7 @@
 - [x] LLM 응답 완결성 검증
 
 ### Phase 7: UI/UX 개선
-- [x] 탭 인터페이스 (대시보드, 날짜별 요약, URL 정보)
+- [x] 탭 인터페이스 (대시보드, 날짜별 요약, URL 정보, 기타)
 - [x] 달력 날짜 선택
 - [x] 상태바 개선 (작업 완료 상태 표시)
 - [x] URL 정보 탭 (추출, 정렬, 저장)
@@ -98,7 +98,27 @@
 
 ## 4. 버전 히스토리
 
-### v2.2.3 (현재)
+### v2.3.1 (현재)
+- **기타 기능 탭 추가**: 4번째 탭 "🔧 기타" (통계 정보 갱신, 향후 확장용)
+- **도구 메뉴에 복구 기능 배치**: DB 전체 복구, 채팅방 복구(비파괴적)
+- **채팅방 복구 기능 신규**: 파일 디렉터리에 있지만 DB에 없는 채팅방만 추가
+- **URL 탭 동기화/복구 버튼 유지**: 채팅방별 기능이므로 URL 탭에 배치
+- **FileStorage.get_all_rooms()**: data/url/ 디렉터리도 스캔하도록 확장
+- **도움말 정보**: 버전 2.3.1, 제작자 민연홍, GitHub 링크 추가
+
+### v2.3.0
+- **비모달 요약 프로그레스**: `SummaryProgressDialog` (모달) → `SummaryProgressWidget` (상태바 내장)
+  - 요약 중 메인 윈도우 자유롭게 조작 가능 (다른 채팅방 조회 등)
+  - 상태바에 `[채팅방명] LLM 요약 중...` + 프로그레스바 + 취소 버튼
+  - 중복 실행 방지 (`_summary_in_progress` 플래그)
+  - 채팅방 전환 후 완료 시 상태바 알림만 표시
+- **closeEvent 추가**: 요약 진행 중 앱 종료 시 확인 → worker.cancel() + wait(5000)
+- **대시보드 카드 컴팩트화**: 아이콘+제목+값 한 줄, 서브텍스트에 대화 기간/요약 진행률
+- **DashboardCard.update_card()**: findChild 대신 직접 참조로 값 업데이트
+- **DetachedInstanceError 수정**: `sessionmaker(expire_on_commit=False)` 추가
+- **SummaryProgressWidget CSS**: 카카오 스타일 (#FFF8E1, #FEE500)
+
+### v2.2.3
 - 채팅방 삭제 기능을 ChatRoomWidget ✕ 버튼에서 파일 메뉴로 이동
 - CreateRoomDialog에서 Enter 키로 즉시 생성 가능하도록 수정
 - 요약 헤더 중복 제거: `chat_processor`의 헤더/푸터 제거, `file_storage`에서만 헤더 추가

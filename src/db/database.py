@@ -46,7 +46,7 @@ class Database:
             cursor.execute("PRAGMA temp_store=MEMORY")
             cursor.close()
         
-        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)
         
         # 테이블 생성
         Base.metadata.create_all(self.engine)

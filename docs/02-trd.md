@@ -11,7 +11,7 @@
 │  │                  ui/main_window.py                           │   │
 │  │                   (PySide6 GUI)                              │   │
 │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │   │
-│  │  │ 대시보드 │  │날짜별요약│  │ URL 정보 │  │ 설정     │    │   │
+│  │  │ 대시보드 │  │날짜별요약│  │ URL 정보 │  │ 🔧 기타  │    │   │
 │  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │   │
 │  └──────────────────────────┬──────────────────────────────────┘   │
 │                             │                                       │
@@ -68,13 +68,16 @@ sys.exit(app.exec())
 | `CreateRoomDialog` | 채팅방 생성 다이얼로그 |
 | `UploadFileDialog` | 파일 업로드 다이얼로그 |
 | `SummaryOptionsDialog` | 요약 옵션 다이얼로그 |
-| `SummaryProgressDialog` | 요약 진행률 다이얼로그 |
+| `SummaryProgressDialog` | 요약 진행률 다이얼로그 (미사용, 보존) |
+| `SummaryProgressWidget` | 상태바 내장 비모달 프로그레스 위젯 |
+| `DashboardCard` | 대시보드 통계 카드 (컴팩트, update_card 메서드) |
 | `SettingsDialog` | 설정 다이얼로그 |
 
 **탭 구조**:
 1. **📊 대시보드**: 채팅방 통계, 최근 요약
-2. **📅 날짜별 요약**: 날짜 네비게이션, 상세 요약/원본 보기
-3. **🔗 URL 정보**: 공유된 URL 목록, 저장 기능
+2. **📅 날짜별 요약**: 날짜 네비게이션, 상세 요약 보기
+3. **🔗 URL 정보**: 공유된 URL 목록, 동기화/복구 버튼
+4. **🔧 기타**: 통계 정보 갱신 등
 
 ---
 
@@ -104,6 +107,7 @@ sys.exit(app.exec())
 
 **SQLite 최적화**:
 - WAL 모드 활성화
+- `expire_on_commit=False` (세션 종료 후 ORM 객체 속성 접근 허용)
 - 배치 처리 (500개 단위)
 - 중복 메시지 체크
 
@@ -136,6 +140,7 @@ sys.exit(app.exec())
 | `get_summarized_dates(room)` | 요약 존재 날짜 목록 |
 | `get_dates_needing_summary(room)` | 요약 필요 날짜 (신규/업데이트) |
 | `invalidate_summary_if_updated(room, date, old, new)` | 업데이트 시 요약 무효화 |
+| `get_all_rooms()` | 모든 채팅방 목록 (original/summary/url 디렉터리 스캔) |
 
 ---
 

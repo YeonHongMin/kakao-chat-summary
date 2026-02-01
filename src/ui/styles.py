@@ -329,6 +329,40 @@ QProgressBar::chunk {
     background-color: #FEE500;
     border-radius: 3px;
 }
+
+/* 상태바 요약 프로그레스 위젯 */
+#summaryProgressWidget {
+    background-color: #FFF8E1;
+    border: 1px solid #FFE082;
+    border-radius: 6px;
+    padding: 2px 4px;
+}
+
+#summaryProgressBar {
+    border: 1px solid #FFE082;
+    border-radius: 3px;
+    background-color: #FFFDE7;
+    font-size: 10px;
+}
+
+#summaryProgressBar::chunk {
+    background-color: #FEE500;
+    border-radius: 2px;
+}
+
+#summaryProgressCancelBtn {
+    background-color: transparent;
+    border: none;
+    padding: 0;
+    font-size: 12px;
+    min-width: 24px;
+    max-width: 24px;
+}
+
+#summaryProgressCancelBtn:hover {
+    background-color: #FFCDD2;
+    border-radius: 4px;
+}
 """
 
 # 다크 모드 스타일시트 (옵션)

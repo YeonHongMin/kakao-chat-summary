@@ -1,6 +1,6 @@
 # 📱 KakaoTalk Chat Summarizer
 
-> **v2.2.1** | 최종 업데이트: 2026-02-01
+> **v2.2.3** | 최종 업데이트: 2026-02-01
 
 카카오톡 대화 내보내기 파일을 AI(LLM)를 활용하여 날짜별로 자동 요약하는 **데스크톱 GUI 애플리케이션**입니다.
 
@@ -24,7 +24,7 @@
 ├───────────────┬─────────────────────────────────────────────────┤
 │  채팅방 목록  │  📊 대시보드 | 📅 날짜별 요약 | 🔗 URL 정보     │
 │  ───────────  │  ─────────────────────────────────────────────  │
-│  📁 바이브랩스│  💬 메시지    👥 참여자    📝 요약              │
+│  📁 개발팀   │  💬 메시지    👥 참여자    📝 요약              │
 │  📁 스터디방  │   1,234        15         30                   │
 │               │  ─────────────────────────────────────────────  │
 │  [➕ 채팅방]  │  📅 최근 요약                                   │
@@ -102,10 +102,11 @@ python src/app.py
 
 ### 2. 기본 워크플로우
 
-1. **채팅방 만들기**: 좌측 하단 `➕ 채팅방 만들기` 클릭
+1. **채팅방 만들기**: 좌측 하단 `➕ 채팅방 만들기` 클릭 (Enter 키로 즉시 생성)
 2. **파일 업로드**: `📤 파일 업로드` 클릭 → 카카오톡 내보내기 .txt 선택
 3. **요약 생성**: 메뉴 → 도구 → `LLM 요약 생성` 클릭
-4. **결과 확인**: 탭에서 대시보드, 날짜별 요약, URL 정보 확인
+4. **채팅방 삭제**: 채팅방 선택 후 메뉴 → 파일 → `채팅방 삭제...` 클릭
+5. **결과 확인**: 탭에서 대시보드, 날짜별 요약, URL 정보 확인
 
 ### 3. 카카오톡 대화 내보내기
 
@@ -133,7 +134,10 @@ kakao-chat-summary/
 │   ├── llm_client.py            # LLMClient 클래스
 │   ├── chat_processor.py        # ChatProcessor 클래스
 │   ├── url_extractor.py         # URL 추출 함수
-│   └── manual/                  # CLI 스크립트 (레거시)
+│   ├── import_to_db.py          # DB import 유틸
+│   ├── scheduler/
+│   │   └── tasks.py             # SyncScheduler (프레임워크 구현, 앱 미연동)
+│   └── manual/                  # CLI 스크립트 (수동 요약용, 레거시)
 │
 ├── data/
 │   ├── db/                      # SQLite 데이터베이스
@@ -142,6 +146,7 @@ kakao-chat-summary/
 │   ├── summary/<채팅방>/        # LLM 요약 (일별 MD)
 │   └── url/<채팅방>/            # URL 목록 (3개 파일)
 │
+├── output/                      # CLI 스크립트 (src/manual/) 출력 디렉터리
 ├── upload/                      # 파일 업로드 기본 디렉터리
 ├── logs/                        # 로그 파일
 ├── docs/                        # 문서
@@ -153,16 +158,25 @@ kakao-chat-summary/
 
 ---
 
-## 🔧 CLI 도구 (선택)
+## 🔧 CLI 도구 (수동 요약용, 레거시)
 
-`src/manual/` 디렉터리의 CLI 스크립트도 별도 사용 가능:
+`src/manual/` 디렉터리의 CLI 스크립트는 GUI 앱과 별개로 동작합니다.
+DB/FileStorage를 사용하지 않으며, 결과는 `output/` 디렉터리에 저장됩니다.
+
+### Full 스크립트 (상세 요약)
+src/ 모듈을 재사용합니다 (`full_config`, `parser`, `chat_processor`, `url_extractor`).
 
 ```bash
-# 상세 요약
 python src/manual/full_date_summary.py data/채팅방.txt
 python src/manual/full_yesterday_summary.py --llm minimax data/
+python src/manual/full_2days_summary.py data/채팅방.txt
+python src/manual/full_today_summary.py --llm glm data/
+```
 
-# 간결 요약 (음슴체)
+### Simple 스크립트 (간결 요약, 음슴체)
+자체 내장 구현으로 외부 모듈 의존 없이 단독 실행 가능합니다.
+
+```bash
 python src/manual/simple_date_summary.py data/채팅방.txt
 python src/manual/simple_today_summary.py --llm glm data/
 ```
@@ -178,7 +192,7 @@ python src/manual/simple_today_summary.py --llm glm data/
 | `MINIMAX_API_KEY` | LLM별 | MiniMax API 키 |
 | `PERPLEXITY_API_KEY` | LLM별 | Perplexity API 키 |
 | `LLM_PROVIDER` | - | 기본 LLM 제공자 (기본: glm) |
-| `API_TIMEOUT` | - | API 타임아웃 초 (기본: 600) |
+| `API_TIMEOUT` | - | API read 타임아웃 초 (기본: 600, connect: 60) |
 
 ---
 

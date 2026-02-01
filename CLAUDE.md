@@ -14,7 +14,7 @@
 | **언어** | Python 3.11+ |
 | **GUI** | PySide6 (Qt for Python) |
 | **DB** | SQLite + SQLAlchemy ORM |
-| **버전** | v2.2.2 |
+| **버전** | v2.2.3 |
 | **최종 업데이트** | 2026-02-01 |
 
 ---
@@ -42,14 +42,14 @@ kakao-chat-summary/
 │   ├── import_to_db.py        # DB import 유틸
 │   └── scheduler/
 │       ├── __init__.py
-│       └── tasks.py           # 스케줄러 태스크 (미구현)
-│   └── manual/                # CLI 스크립트 (레거시)
+│       └── tasks.py           # SyncScheduler (프레임워크 구현, 메인 앱 미연동)
+│   └── manual/                # CLI 스크립트 (수동 요약용, 레거시)
 │       ├── README.md
-│       ├── full_date_summary.py
+│       ├── full_date_summary.py      # 상세 요약 - src/ 모듈 재사용
 │       ├── full_yesterday_summary.py
 │       ├── full_2days_summary.py
 │       ├── full_today_summary.py
-│       ├── simple_date_summary.py
+│       ├── simple_date_summary.py    # 간결 요약 (음슴체) - 자체 내장 구현
 │       ├── simple_yesterday_summary.py
 │       ├── simple_2days_summary.py
 │       └── simple_today_summary.py
@@ -67,6 +67,7 @@ kakao-chat-summary/
 │           ├── <채팅방>_urls_recent.md
 │           ├── <채팅방>_urls_weekly.md
 │           └── <채팅방>_urls_all.md
+├── output/                    # CLI 스크립트 (src/manual/) 출력 디렉터리
 ├── upload/                    # 파일 업로드 기본 디렉터리
 ├── logs/                      # 로그 (summarizer_YYYYMMDD.log)
 ├── docs/                      # 문서 (01-prd ~ 06-tasks)
@@ -159,7 +160,7 @@ class URL(Base):
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ 메뉴바                                                   │
-│ ├─ 파일: 채팅방 추가, 종료                               │
+│ ├─ 파일: 채팅방 추가, 채팅방 삭제, 종료                   │
 │ ├─ 도구: 지금 동기화, LLM 요약 생성, DB 복구, 설정       │
 │ └─ 도움말: 정보                                          │
 ├──────────────┬──────────────────────────────────────────┤
@@ -207,13 +208,14 @@ class URL(Base):
 ## 🔑 핵심 기능
 
 ### 1. 채팅방 관리
-- 채팅방 생성/삭제
+- 채팅방 생성 (Enter 키로 즉시 생성 가능)
+- 채팅방 삭제 (파일 메뉴 → 현재 선택된 채팅방 삭제, 확인 다이얼로그)
 - 채팅방 목록 (메시지 개수 내림차순 정렬)
 - 파일 업로드 (기본 디렉터리: `upload/`)
 
 ### 2. LLM 요약 생성
 - **지원 LLM**: Z.AI GLM, OpenAI GPT-4o-mini, MiniMax, Perplexity
-- **요약 옵션**: 전체 날짜, 요약 안된 날짜만 (요약 파일 존재 여부 기반), 날짜 범위 선택
+- **요약 옵션**: 요약 필요한 날짜만 (기본), 오늘, 어제~오늘, 엇그제~오늘, 전체 일자 + 이미 요약된 날짜 건너뛰기 체크박스
 - **응답 검증**: finish_reason, 최소 길이, 필수 섹션, 잘림 패턴
 - **진행 상황**: 실시간 진행률, 취소 가능
 
@@ -246,26 +248,36 @@ class URL(Base):
 ### src/db/database.py - Database 클래스
 ```python
 # 채팅방
-create_room(name) -> ChatRoom
+create_room(name, file_path=None) -> ChatRoom
 get_all_rooms() -> List[ChatRoom]  # 메시지 수 내림차순
-get_room_by_id(room_id) -> ChatRoom
-delete_room(room_id) -> bool
+get_room_by_id(room_id) -> Optional[ChatRoom]
+get_room_by_name(name) -> Optional[ChatRoom]
+get_room_stats(room_id) -> Dict[str, Any]
+update_room_sync_time(room_id)
+delete_room(room_id)
 
 # 메시지
-add_messages(room_id, messages) -> int  # 배치, 중복 체크
-get_messages_by_date(room_id, date) -> List[Message]
-get_message_count_by_date(room_id, date) -> int
-get_available_dates(room_id) -> List[str]
+add_messages(room_id, messages, batch_size=500) -> int  # 배치, 중복 체크
+get_messages_by_room(room_id, start_date=None, end_date=None) -> List[Message]
+get_message_count_by_room(room_id) -> int
+get_message_count_by_date(room_id, target_date) -> int
+get_unique_senders(room_id) -> List[str]
 
 # 요약
-add_summary(room_id, date, content, llm_provider) -> Summary
-get_summary_by_date(room_id, date) -> Summary
-get_summarized_dates(room_id) -> List[str]
-delete_summary(room_id, date) -> bool
+add_summary(room_id, summary_date, summary_type, content, llm_provider=None) -> Summary
+get_summary_by_id(summary_id) -> Optional[Summary]
+get_summaries_by_room(room_id, summary_type=None) -> List[Summary]
+delete_summary(room_id, summary_date) -> bool
+
+# 동기화 로그
+add_sync_log(room_id, status, message_count, new_message_count, error_message) -> SyncLog
+get_sync_logs_by_room(room_id, limit=10) -> List[SyncLog]
 
 # URL
-add_urls_batch(room_id, urls_dict) -> int
-get_urls_by_room(room_id) -> List[URL]
+add_url(room_id, url, descriptions=None, source_date=None) -> URL
+add_urls_batch(room_id, urls) -> int
+get_urls_by_room(room_id) -> Dict[str, List[str]]
+get_url_count_by_room(room_id) -> int
 clear_urls_by_room(room_id) -> int
 ```
 
@@ -307,7 +319,10 @@ save_urls_to_file(urls_dict, filepath) -> bool
 ```python
 __init__(provider='glm')
 summarize(text) -> Dict  # {"success": bool, "content": str, "error": str}
-_validate_response(content) -> bool  # 응답 완결성 검증
+_validate_response_content(content) -> Dict[str, Any]  # 응답 완결성 검증
+_wait_for_rate_limit()  # ChatGPT Rate Limit 대기 (21초)
+# timeout: (connect=60s, read=600s), 스트리밍 방식
+# CHATGPT_RATE_LIMIT_DELAY = 21
 ```
 
 ### src/full_config.py - Config 클래스
@@ -341,12 +356,35 @@ PERPLEXITY_API_KEY=your_key_here
 ## 🚀 실행 방법
 
 ```bash
-# 가상환경 활성화
-.venv\Scripts\activate  # Windows
-
-# 앱 실행
+# GUI 앱 실행 (가상환경 불필요)
 python src/app.py
+
+# CLI 스크립트 (수동 요약) - 결과는 output/ 디렉터리에 저장
+python src/manual/full_date_summary.py <파일 또는 디렉터리> [--llm chatgpt]
+python src/manual/simple_today_summary.py <파일> [--llm glm]
 ```
+
+### CLI 스크립트 (src/manual/) 상세
+
+**두 가지 유형**:
+
+| 유형 | 스크립트 | 특징 |
+|------|----------|------|
+| **Full (상세)** | `full_*.py` | src/ 모듈 재사용 (`full_config`, `parser`, `chat_processor`, `url_extractor`) |
+| **Simple (간결)** | `simple_*.py` | 자체 내장 구현 (`SimpleConfig`, `SimpleParser`, `SimpleLLMClient`), 음슴체 |
+
+**날짜 범위별 스크립트**:
+| 범위 | Full | Simple |
+|------|------|--------|
+| 오늘만 | `full_today_summary.py` | `simple_today_summary.py` |
+| 어제~오늘 | `full_yesterday_summary.py` | `simple_yesterday_summary.py` |
+| 엇그제~오늘 | `full_2days_summary.py` | `simple_2days_summary.py` |
+| 전체 날짜 | `full_date_summary.py` | `simple_date_summary.py` |
+
+**GUI와의 차이**:
+- DB/FileStorage 사용하지 않음 (직접 파일 I/O)
+- 출력: `output/` 디렉터리 (GUI는 `data/summary/`)
+- Simple 스크립트 timeout: (60, 300)초 (GUI는 (60, 600)초)
 
 ---
 
@@ -362,7 +400,7 @@ python src/app.py
 
 ## 🔮 향후 개선 사항 (Pending)
 
-1. [ ] APScheduler로 주기적 동기화 구현
+1. [ ] APScheduler 메인 앱 연동 (SyncScheduler 프레임워크는 구현 완료)
 2. [ ] 새 메시지 개수 표시
 3. [ ] 설정 다이얼로그에서 API 키 입력
 4. [ ] 요약 품질 평가 기능
@@ -394,6 +432,30 @@ python src/app.py
 **설계 원칙**: 요약 필요 여부는 **파일 존재 여부**로 판단 (`get_dates_needing_summary`, `get_summarized_dates`).
 DB에 데이터가 있어도 파일이 없으면 재수집 대상이며, DB 저장 시 기존 행을 삭제 후 추가하여 중복 방지.
 
+### v2.2.3 - UI 개선 및 중복 헤더 제거 (2026-02-01)
+
+**변경 1: 채팅방 삭제를 파일 메뉴로 이동**
+- ChatRoomWidget의 ✕ 삭제 버튼 제거 (오클릭 위험, 버튼이 보이지 않는 문제)
+- 파일 메뉴에 "채팅방 삭제..." 액션 추가
+- 현재 선택된 채팅방(`self.current_room_id`)을 기준으로 삭제
+- 채팅방 미선택 시 경고 메시지 표시
+
+**변경 2: CreateRoomDialog Enter 키 수정**
+- Enter 키가 취소(reject) 대신 만들기(accept) 동작하도록 수정
+- `name_input.returnPressed` → `_on_create` 연결
+- `create_btn.setDefault(True)` 설정
+- 빈 이름 입력 시 가드 추가
+
+**변경 3: 요약 헤더 중복 제거**
+- `chat_processor._format_as_markdown()`의 "카카오톡 대화 요약 리포트" 헤더/푸터 제거
+- `file_storage._format_summary_content()`의 헤더만 사용 (채팅방명, 날짜, LLM, 생성 시각 포함)
+
+**변경 4: placeholder 개인정보 제거**
+- CreateRoomDialog의 placeholder를 실제 고객명에서 일반 그룹명으로 변경
+
+**변경 5: LLM read timeout 증가**
+- `llm_client.py`의 read_timeout을 300초 → 600초로 증가
+
 ---
 
 ## 📚 관련 문서
@@ -409,4 +471,4 @@ DB에 데이터가 있어도 파일이 없으면 재수집 대상이며, DB 저�
 
 ---
 
-*마지막 업데이트: 2026-02-01 | 버전: v2.2.2*
+*마지막 업데이트: 2026-02-01 | 버전: v2.2.3*

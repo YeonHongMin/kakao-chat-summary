@@ -62,12 +62,14 @@ sys.exit(app.exec())
 |--------|------|
 | `MainWindow` | 메인 윈도우 (탭, 메뉴, 상태바) |
 | `FileUploadWorker` | 파일 업로드 백그라운드 처리 |
+| `SyncWorker` | 백그라운드 동기화 처리 |
 | `SummaryGeneratorWorker` | LLM 요약 백그라운드 처리 |
 | `RecoveryWorker` | DB 복구 백그라운드 처리 |
 | `CreateRoomDialog` | 채팅방 생성 다이얼로그 |
 | `UploadFileDialog` | 파일 업로드 다이얼로그 |
 | `SummaryOptionsDialog` | 요약 옵션 다이얼로그 |
 | `SummaryProgressDialog` | 요약 진행률 다이얼로그 |
+| `SettingsDialog` | 설정 다이얼로그 |
 
 **탭 구조**:
 1. **📊 대시보드**: 채팅방 통계, 최근 요약
@@ -84,11 +86,21 @@ sys.exit(app.exec())
 **주요 메서드**:
 | 메서드 | 설명 |
 |--------|------|
-| `create_room(name)` | 채팅방 생성 |
-| `add_messages(room_id, messages)` | 메시지 일괄 추가 (중복 체크) |
+| `create_room(name, file_path=None)` | 채팅방 생성 |
+| `get_all_rooms()` | 채팅방 목록 (메시지 수 내림차순) |
+| `get_room_by_id(room_id)` | 채팅방 조회 |
+| `get_room_by_name(name)` | 이름으로 채팅방 조회 |
 | `get_room_stats(room_id)` | 채팅방 통계 조회 |
-| `add_summary(room_id, date, type, content)` | 요약 저장 |
-| `get_summaries_by_room(room_id)` | 요약 목록 조회 |
+| `delete_room(room_id)` | 채팅방 삭제 |
+| `add_messages(room_id, messages, batch_size=500)` | 메시지 일괄 추가 (중복 체크) |
+| `get_messages_by_room(room_id, start_date, end_date)` | 메시지 조회 |
+| `get_message_count_by_date(room_id, target_date)` | 날짜별 메시지 수 |
+| `add_summary(room_id, summary_date, summary_type, content, llm_provider)` | 요약 저장 |
+| `get_summaries_by_room(room_id, summary_type)` | 요약 목록 조회 |
+| `delete_summary(room_id, summary_date)` | 요약 삭제 |
+| `add_urls_batch(room_id, urls)` | URL 일괄 추가 |
+| `get_urls_by_room(room_id)` | URL 목록 조회 |
+| `clear_urls_by_room(room_id)` | URL 전체 삭제 |
 
 **SQLite 최적화**:
 - WAL 모드 활성화
@@ -117,7 +129,7 @@ sys.exit(app.exec())
 | 메서드 | 설명 |
 |--------|------|
 | `save_daily_original(room, date, messages)` | 원본 대화 저장 |
-| `save_daily_summary(room, date, content)` | 요약 저장 |
+| `save_daily_summary(room, date, content, llm_provider)` | 요약 저장 |
 | `load_daily_original(room, date)` | 원본 대화 로드 |
 | `load_daily_summary(room, date)` | 요약 로드 |
 | `get_available_dates(room)` | 원본 존재 날짜 목록 |
@@ -152,15 +164,16 @@ sys.exit(app.exec())
 **주요 기능**:
 - 스트리밍 모드 (`stream=True`)
 - max_tokens: 16000
-- 타임아웃: (60, 300) 연결/읽기
+- 타임아웃: (60, 600) 연결/읽기
+- ChatGPT Rate Limit 대기: 21초 (`CHATGPT_RATE_LIMIT_DELAY`)
 
-**응답 완결성 검증**:
+**응답 완결성 검증** (`_validate_response_content`):
 | 검증 항목 | 설명 |
 |-----------|------|
 | `finish_reason` | `length`면 실패 처리 |
 | 최소 길이 | 100자 미만 실패 |
 | 필수 섹션 | "3줄 요약" 포함 여부 |
-| 불완전 패턴 | `...`, `--` 등 감지 |
+| 불완전 패턴 | `...`, `--` 등 감지, `###` 2개 미만 |
 
 ---
 
@@ -185,11 +198,27 @@ sys.exit(app.exec())
 
 | 메서드 | 설명 |
 |--------|------|
-| `process_summary(text)` | LLM으로 요약 후 Markdown 포맷팅 |
+| `process_summary(text)` | LLM으로 요약 후 본문만 반환 (헤더/푸터는 `file_storage`에서 추가) |
+| `_format_as_markdown(content)` | 마크다운 포맷팅 (v2.2.3에서 헤더/푸터 제거, content.strip()만 반환) |
 
 ---
 
-### 2.10 url_extractor.py
+### 2.10 import_to_db.py
+**역할**: CLI 기반 대량 DB import 유틸
+
+**클래스**:
+| 클래스 | 설명 |
+|--------|------|
+| `MessageParser` | 메시지 라인 파싱 (닉네임, 시간, 내용 추출) |
+| `DataImporter` | 파일/디렉터리 일괄 import, 통계 표시 |
+
+```bash
+python src/import_to_db.py <파일 또는 디렉터리> [--stats] [--daily]
+```
+
+---
+
+### 2.11 url_extractor.py
 **역할**: URL 추출, 정규화 및 저장
 
 | 함수 | 설명 |
@@ -243,6 +272,22 @@ sys.exit(app.exec())
        ▼
 [Database.add_summary] → SQLite 저장
 ```
+
+### 3.3 CLI 스크립트 흐름 (src/manual/)
+```
+[CLI 인자] → 파일/디렉터리 지정
+       │
+       ▼
+[KakaoLogParser] → 날짜별 메시지 그룹화
+       │
+       ▼
+[ChatProcessor.process_summary]  (Full) 또는  [SimpleLLMClient] (Simple)
+       │
+       ▼
+[output/ 디렉터리에 직접 파일 저장]  (DB/FileStorage 미사용)
+```
+
+> **참고**: Full 스크립트는 src/ 모듈(`parser`, `full_config`, `chat_processor`, `url_extractor`)을 재사용하고, Simple 스크립트는 자체 내장 구현(`SimpleConfig`, `SimpleParser`, `SimpleLLMClient`)으로 외부 의존 없이 단독 실행됩니다.
 
 ---
 

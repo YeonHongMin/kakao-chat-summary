@@ -98,12 +98,12 @@ class LLMClient:
             if config.current_provider == "chatgpt":
                 LLMClient._last_chatgpt_request_time = time.time()
             
-            # 스트리밍으로 응답 받기 (연결 60초, 읽기 300초)
+            # 스트리밍으로 응답 받기 (연결 60초, 읽기 600초)
             response = requests.post(
-                self.provider_info.api_url, 
-                headers=headers, 
-                json=payload, 
-                timeout=(60, 300),  # (connect_timeout, read_timeout)
+                self.provider_info.api_url,
+                headers=headers,
+                json=payload,
+                timeout=(60, 600),  # (connect_timeout, read_timeout)
                 stream=True
             )
             

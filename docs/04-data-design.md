@@ -22,22 +22,24 @@ data/db/chat_history.db
 |------|------|------|
 | id | INTEGER | Primary Key |
 | name | VARCHAR(255) | 채팅방 이름 |
-| file_path | TEXT | 원본 파일 경로 |
+| file_path | VARCHAR(512) | 원본 파일 경로 |
+| participant_count | INTEGER | 참여자 수 (기본: 0) |
+| last_sync_at | DATETIME | 마지막 동기화 시각 |
 | created_at | DATETIME | 생성일 |
-| updated_at | DATETIME | 수정일 |
 
 #### messages (메시지)
 | 컬럼 | 타입 | 설명 |
 |------|------|------|
 | id | INTEGER | Primary Key |
 | room_id | INTEGER | FK → chat_rooms.id |
-| date | DATE | 메시지 날짜 |
-| time | VARCHAR(20) | 메시지 시간 |
-| sender | VARCHAR(100) | 발신자 |
+| sender | VARCHAR(255) | 발신자 |
 | content | TEXT | 메시지 내용 |
+| message_date | DATE | 메시지 날짜 |
+| message_time | TIME | 메시지 시간 |
+| raw_line | TEXT | 원본 라인 |
 | created_at | DATETIME | 생성일 |
 
-**UniqueConstraint**: (room_id, date, time, sender, content)
+**UniqueConstraint**: (room_id, sender, message_date, message_time, content)
 
 #### summaries (요약)
 | 컬럼 | 타입 | 설명 |
@@ -45,9 +47,10 @@ data/db/chat_history.db
 | id | INTEGER | Primary Key |
 | room_id | INTEGER | FK → chat_rooms.id |
 | summary_date | DATE | 요약 대상 날짜 |
-| summary_type | VARCHAR(50) | 요약 타입 (full/simple) |
+| summary_type | VARCHAR(50) | 요약 타입 (daily/2days/weekly) |
 | content | TEXT | 요약 내용 |
-| llm_provider | VARCHAR(50) | 사용된 LLM |
+| llm_provider | VARCHAR(100) | 사용된 LLM |
+| token_count | INTEGER | 토큰 수 |
 | created_at | DATETIME | 생성일 |
 
 #### urls (추출된 URL)
@@ -68,10 +71,11 @@ data/db/chat_history.db
 |------|------|------|
 | id | INTEGER | Primary Key |
 | room_id | INTEGER | FK → chat_rooms.id |
-| sync_type | VARCHAR(50) | 동기화 타입 |
-| status | VARCHAR(20) | 상태 (success/failed) |
-| message | TEXT | 상세 메시지 |
-| created_at | DATETIME | 생성일 |
+| status | VARCHAR(50) | 상태 (success/failed/partial) |
+| message_count | INTEGER | 메시지 수 |
+| new_message_count | INTEGER | 신규 메시지 수 |
+| error_message | TEXT | 에러 메시지 |
+| synced_at | DATETIME | 동기화 시각 |
 
 ---
 
@@ -99,17 +103,26 @@ data/
         ├── <채팅방명>_urls_recent.md     # 최근 3일
         ├── <채팅방명>_urls_weekly.md     # 최근 1주
         └── <채팅방명>_urls_all.md        # 전체
+
+output/                                  # CLI 스크립트 (src/manual/) 출력 전용
+├── <채팅방명>_full_summary.md           # Full 상세 요약
+├── <채팅방명>_full_today_summary.md     # Full 오늘 요약
+├── <채팅방명>_simple_summary.md         # Simple 간결 요약
+├── <채팅방명>_<date>_urls.md            # URL 추출 (Full 스크립트)
+└── ...
 ```
+
+> **참고**: `data/` 디렉터리는 GUI 앱 전용, `output/` 디렉터리는 CLI 스크립트(`src/manual/`) 전용입니다. CLI 스크립트는 DB/FileStorage를 사용하지 않습니다.
 
 ### 3.2 파일 명명 규칙
 
 | 파일 유형 | 형식 | 예시 |
 |-----------|------|------|
-| 원본 대화 | `<채팅방>_YYYYMMDD_full.md` | `바이브랩스_20240120_full.md` |
-| 요약 | `<채팅방>_YYYYMMDD_summary.md` | `바이브랩스_20240120_summary.md` |
-| URL (최근3일) | `<채팅방>_urls_recent.md` | `바이브랩스_urls_recent.md` |
-| URL (최근1주) | `<채팅방>_urls_weekly.md` | `바이브랩스_urls_weekly.md` |
-| URL (전체) | `<채팅방>_urls_all.md` | `바이브랩스_urls_all.md` |
+| 원본 대화 | `<채팅방>_YYYYMMDD_full.md` | `개발팀_20240120_full.md` |
+| 요약 | `<채팅방>_YYYYMMDD_summary.md` | `개발팀_20240120_summary.md` |
+| URL (최근3일) | `<채팅방>_urls_recent.md` | `개발팀_urls_recent.md` |
+| URL (최근1주) | `<채팅방>_urls_weekly.md` | `개발팀_urls_weekly.md` |
+| URL (전체) | `<채팅방>_urls_all.md` | `개발팀_urls_all.md` |
 
 ---
 
@@ -205,7 +218,7 @@ class ParseResult:
 ### 6.1 원본 대화 파일 (*_full.md)
 
 ```markdown
-# 바이브랩스 - 2024-01-20 대화 원본
+# 개발팀 - 2024-01-20 대화 원본
 
 > 총 42개 메시지
 
@@ -220,7 +233,7 @@ class ParseResult:
 ### 6.2 요약 파일 (*_summary.md)
 
 ```markdown
-# 바이브랩스 - 2024-01-20 요약
+# 개발팀 - 2024-01-20 요약
 
 > LLM: Z.AI GLM | 생성: 2024-01-25 15:30:00
 
@@ -254,7 +267,7 @@ class ParseResult:
 ### 6.3 URL 목록 파일 (*_urls_*.md)
 
 ```markdown
-# 🔗 [바이브랩스] URL 목록 (전체)
+# 🔗 [개발팀] URL 목록 (전체)
 
 > 총 415개 URL | 생성: 2024-01-25 15:30:00
 

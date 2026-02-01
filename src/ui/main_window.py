@@ -232,8 +232,7 @@ class SyncWorker(QThread):
 class ChatRoomWidget(QFrame):
     """채팅방 아이템 위젯."""
     clicked = Signal(int, str)  # room_id, file_path
-    
-    def __init__(self, room_id: int, name: str, message_count: int = 0, 
+    def __init__(self, room_id: int, name: str, message_count: int = 0,
                  new_count: int = 0, last_sync: Optional[datetime] = None,
                  file_path: Optional[str] = None):
         super().__init__()
@@ -284,8 +283,9 @@ class ChatRoomWidget(QFrame):
             name_layout.addWidget(badge)
         
         name_layout.addStretch()
+
         info_layout.addLayout(name_layout)
-        
+
         # 메시지 수 및 동기화 시간
         sync_text = "동기화 안됨"
         if last_sync:
@@ -972,7 +972,7 @@ class CreateRoomDialog(QDialog):
         name_layout = QVBoxLayout(name_group)
         
         self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("예: 코드팩터리, 바이브랩스...")
+        self.name_input.setPlaceholderText("예: 개발팀, 동아리모임...")
         self.name_input.setStyleSheet("""
             QLineEdit {
                 padding: 12px;
@@ -1018,6 +1018,8 @@ class CreateRoomDialog(QDialog):
         
         # 입력 변경 시 버튼 활성화 체크
         self.name_input.textChanged.connect(self._check_input)
+        self.name_input.returnPressed.connect(self._on_create)
+        self.create_btn.setDefault(True)
     
     def _check_input(self):
         """입력 확인 및 버튼 활성화."""
@@ -1026,7 +1028,10 @@ class CreateRoomDialog(QDialog):
     
     def _on_create(self):
         """만들기 버튼 클릭."""
-        self.room_name = self.name_input.text().strip()
+        name = self.name_input.text().strip()
+        if not name:
+            return
+        self.room_name = name
         self.accept()
 
 
@@ -1673,7 +1678,11 @@ class MainWindow(QMainWindow):
         add_action.setShortcut("Ctrl+O")
         add_action.triggered.connect(self._on_add_room)
         file_menu.addAction(add_action)
-        
+
+        delete_room_action = QAction("채팅방 삭제...", self)
+        delete_room_action.triggered.connect(self._on_delete_room)
+        file_menu.addAction(delete_room_action)
+
         file_menu.addSeparator()
         
         exit_action = QAction("종료", self)
@@ -1860,6 +1869,41 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "오류", f"채팅방 생성 실패: {str(e)}")
     
+    @Slot()
+    def _on_delete_room(self):
+        """채팅방 삭제 (파일 메뉴에서 호출)."""
+        if self.current_room_id is None:
+            QMessageBox.warning(self, "알림", "먼저 채팅방을 선택하세요.")
+            return
+
+        room = self.db.get_room_by_id(self.current_room_id)
+        if not room:
+            QMessageBox.warning(self, "오류", "선택된 채팅방을 찾을 수 없습니다.")
+            return
+
+        room_name = room.name
+        reply = QMessageBox.question(
+            self, "채팅방 삭제",
+            f"'{room_name}' 채팅방을 정말 삭제하시겠습니까?\n\n"
+            f"DB의 메시지, 요약, URL 데이터가 모두 삭제됩니다.\n"
+            f"(data/ 폴더의 파일은 유지됩니다)",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            self.db.delete_room(self.current_room_id)
+            self.current_room_id = None
+            self.current_room_file = None
+            self.header_label.setText("📊 대시보드")
+            self.summary_browser.setHtml("<p style='color: #888;'>채팅방을 선택하세요.</p>")
+            self._load_rooms()
+            self._update_status(f"'{room_name}' 채팅방 삭제 완료", "success")
+        except Exception as e:
+            QMessageBox.warning(self, "오류", f"채팅방 삭제 실패: {str(e)}")
+
     @Slot()
     def _on_upload_file(self):
         """현재 선택된 채팅방에 파일 업로드."""

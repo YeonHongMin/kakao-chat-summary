@@ -67,7 +67,7 @@
 - [ ] 추가 LLM 지원 (Claude, Gemini 등)
 - [ ] 프롬프트 템플릿 외부화 (YAML/JSON)
 - [ ] 설정 다이얼로그 개선
-- [ ] 자동 동기화 (APScheduler 연동)
+- [ ] 자동 동기화 메인 앱 연동 (`SyncScheduler` 프레임워크 구현 완료, 앱 통합 필요)
 - [ ] 요약 품질 평가 지표
 
 ### 우선순위 낮음 (P2)
@@ -98,7 +98,20 @@
 
 ## 4. 버전 히스토리
 
-### v2.2.1 (현재)
+### v2.2.3 (현재)
+- 채팅방 삭제 기능을 ChatRoomWidget ✕ 버튼에서 파일 메뉴로 이동
+- CreateRoomDialog에서 Enter 키로 즉시 생성 가능하도록 수정
+- 요약 헤더 중복 제거: `chat_processor`의 헤더/푸터 제거, `file_storage`에서만 헤더 추가
+- CreateRoomDialog placeholder에서 개인정보(고객명) 제거
+- LLM read timeout 300초 → 600초로 증가
+
+### v2.2.2
+- LLM 요약 생성 후 DB에도 저장 (파일만 저장되던 버그 수정)
+- RecoveryWorker date 타입 버그 수정 (문자열 → date 객체)
+- RecoveryWorker 요약 내용 500자 잘림 → 전체 저장으로 변경
+- `database.py`에 `delete_summary()` 메서드 추가
+
+### v2.2.1
 - 요약 필요 날짜 판단 로직 버그 수정: mtime 비교 → 요약 파일 존재 여부 확인
   - 파일 재업로드 시 모든 original mtime이 갱신되어 이미 요약된 날짜도 재수집되던 문제 해결
   - 메시지 추가 시에는 업로드 과정에서 `invalidate_summary_if_updated()`가 요약 파일을 삭제하여 정상 감지

@@ -34,7 +34,8 @@
 > 📌 **API 호환성**: 모든 LLM 제공자는 **OpenAI 호환 API** 형식을 사용합니다.
 
 ### 2.3 채팅방 관리
-- **채팅방 생성** 및 관리
+- **채팅방 생성** (Enter 키로 즉시 생성 가능)
+- **채팅방 삭제** (파일 메뉴 → 현재 선택된 채팅방 삭제, 확인 다이얼로그)
 - **파일 업로드** (카카오톡 내보내기 .txt)
 - **중복 메시지 자동 처리**
 - **채팅방별 통계** (메시지 수, 참여자 수, 요약 수)
@@ -97,7 +98,7 @@ data/
 
 | 구분 | 기술 |
 |------|------|
-| 언어 | Python 3.10+ |
+| 언어 | Python 3.11+ |
 | GUI | PySide6 (Qt for Python) |
 | 데이터베이스 | SQLite + SQLAlchemy ORM |
 | LLM API | GLM, OpenAI, MiniMax, Perplexity (OpenAI 호환) |
@@ -108,17 +109,31 @@ data/
 
 ---
 
-## 5. CLI 도구 (선택)
+## 5. CLI 도구 (수동 요약용, 레거시)
 
-`src/manual/` 디렉터리에 독립 실행 가능한 CLI 스크립트 제공:
+`src/manual/` 디렉터리에 독립 실행 가능한 CLI 스크립트 제공. GUI 앱과 별개로 동작하며, DB/FileStorage를 사용하지 않고 `output/` 디렉터리에 직접 파일을 저장합니다.
+
+### 5.1 Full 스크립트 (상세 요약)
+src/ 모듈을 재사용합니다 (`full_config`, `parser`, `chat_processor`, `url_extractor`).
 
 | 스크립트 | 설명 |
 |----------|------|
-| `full_date_summary.py` | 전체 날짜 상세 요약 |
-| `simple_date_summary.py` | 전체 날짜 간결 요약 |
-| `full_yesterday_summary.py` | 어제~오늘 상세 요약 |
-| `simple_yesterday_summary.py` | 어제~오늘 간결 요약 |
-| `full_2days_summary.py` | 2일 전~오늘 상세 요약 |
-| `simple_2days_summary.py` | 2일 전~오늘 간결 요약 |
 | `full_today_summary.py` | 오늘 상세 요약 |
+| `full_yesterday_summary.py` | 어제~오늘 상세 요약 |
+| `full_2days_summary.py` | 엇그제~오늘 상세 요약 |
+| `full_date_summary.py` | 전체 날짜 상세 요약 |
+
+### 5.2 Simple 스크립트 (간결 요약, 음슴체)
+자체 내장 구현(`SimpleConfig`, `SimpleParser`, `SimpleLLMClient`)으로 외부 모듈 의존 없이 단독 실행 가능합니다.
+
+| 스크립트 | 설명 |
+|----------|------|
 | `simple_today_summary.py` | 오늘 간결 요약 |
+| `simple_yesterday_summary.py` | 어제~오늘 간결 요약 |
+| `simple_2days_summary.py` | 엇그제~오늘 간결 요약 |
+| `simple_date_summary.py` | 전체 날짜 간결 요약 |
+
+### 5.3 실행 방법
+```bash
+python src/manual/<스크립트>.py <파일 또는 디렉터리> [--llm <provider>]
+```

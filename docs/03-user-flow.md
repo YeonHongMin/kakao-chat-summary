@@ -40,7 +40,7 @@
 │  ┌───────────────┐  ┌─────────────────────────────────────┐ │
 │  │  채팅방 목록  │  │          콘텐츠 영역               │ │
 │  │  ──────────── │  │  ┌─────────────────────────────────┐│ │
-│  │  📁 바이브랩스│  │  │  📊 대시보드 | 📅 날짜별 | 🔗 URL ││ │
+│  │  📁 개발팀│  │  │  📊 대시보드 | 📅 날짜별 | 🔗 URL ││ │
 │  │  📁 스터디방  │  │  │─────────────────────────────────││ │
 │  │               │  │  │                                 ││ │
 │  │  [➕ 채팅방]  │  │  │    통계 / 요약 / URL 정보      ││ │
@@ -62,7 +62,7 @@
         ▼
 ┌────────────────────────┐
 │  채팅방 이름 입력      │
-│  예: "바이브랩스"      │
+│  예: "개발팀"      │
 └───────────┬────────────┘
             │
             ▼
@@ -70,8 +70,8 @@
 │  채팅방 생성 완료      │
 │  - DB에 레코드 생성    │
 │  - 디렉터리 생성       │
-│    data/original/바이브랩스/
-│    data/summary/바이브랩스/
+│    data/original/개발팀/
+│    data/summary/개발팀/
 └───────────┬────────────┘
             │
             ▼
@@ -113,11 +113,11 @@
 │  요약 옵션 다이얼로그  │
 │  ──────────────────── │
 │  📅 날짜 범위:         │
+│    ● 요약 필요한 날짜만│
 │    ○ 오늘             │
 │    ○ 어제~오늘        │
-│    ○ 최근 7일         │
-│    ○ 전체 날짜        │
-│    ● 요약 필요한 날짜만│
+│    ○ 엇그제~오늘      │
+│    ○ 전체 일자        │
 │  ──────────────────── │
 │  🤖 LLM 선택:          │
 │    [Z.AI GLM ▼]        │
@@ -237,7 +237,7 @@
 ┌────────────────────────┐
 │  복구 진행             │
 │  ──────────────────── │
-│  🔧 바이브랩스 복구 중...│
+│  🔧 개발팀 복구 중...│
 │  ▓▓▓▓▓▓▓▓░░░░░░ 60%  │
 └───────────┬────────────┘
             │
@@ -252,18 +252,44 @@
 
 ---
 
-## 3. CLI 사용 (선택)
+## 3. CLI 사용 (수동 요약용, 레거시)
 
-`src/manual/` 디렉터리의 CLI 스크립트도 별도 사용 가능:
+`src/manual/` 디렉터리의 CLI 스크립트는 GUI 앱과 별개로 동작합니다.
+DB/FileStorage를 사용하지 않으며, 결과는 `output/` 디렉터리에 저장됩니다.
+
+### Full 스크립트 (상세 요약)
+src/ 모듈을 재사용합니다 (`full_config`, `parser`, `chat_processor`, `url_extractor`).
 
 ```bash
-# 상세 요약
 python src/manual/full_date_summary.py data/채팅방.txt
 python src/manual/full_yesterday_summary.py --llm minimax data/
+python src/manual/full_2days_summary.py data/채팅방.txt
+python src/manual/full_today_summary.py --llm glm data/
+```
 
-# 간결 요약 (음슴체)
+### Simple 스크립트 (간결 요약, 음슴체)
+자체 내장 구현(`SimpleConfig`, `SimpleParser`, `SimpleLLMClient`)으로 외부 모듈 의존 없이 단독 실행 가능합니다.
+
+```bash
 python src/manual/simple_date_summary.py data/채팅방.txt
 python src/manual/simple_today_summary.py --llm glm data/
+python src/manual/simple_2days_summary.py data/채팅방.txt
+python src/manual/simple_yesterday_summary.py --llm minimax data/
+```
+
+### 실행 모드
+```bash
+# 단일 파일 지정
+python src/manual/<스크립트>.py <파일.txt>
+
+# 디렉터리 일괄 처리
+python src/manual/<스크립트>.py <디렉터리>
+
+# LLM 선택
+python src/manual/<스크립트>.py --llm chatgpt <파일.txt>
+
+# 인자 없이 실행 → 대화형 모드
+python src/manual/<스크립트>.py
 ```
 
 ---

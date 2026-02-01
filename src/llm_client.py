@@ -135,12 +135,30 @@ class LLMClient:
                 return {"success": False, "error": error_msg}
             
             # OpenAI 호환 형식 파싱
-            content = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            content = choice["message"]["content"]
             usage = data.get("usage", {})
+            
+            # finish_reason 체크 (응답 완료 여부)
+            finish_reason = choice.get("finish_reason", "unknown")
+            if finish_reason not in ("stop", "end", None):  # 정상 종료가 아닌 경우
+                self.logger.warning(f"Response may be incomplete: finish_reason={finish_reason}")
+                # length = 토큰 제한으로 잘림, content_filter = 필터링됨
+                if finish_reason == "length":
+                    self.logger.error("Response truncated due to max_tokens limit")
+                    return {"success": False, "error": f"Response truncated (finish_reason: {finish_reason})"}
+            
+            # 응답 완전성 검증
+            validation_result = self._validate_response_content(content)
+            if not validation_result["valid"]:
+                self.logger.error(f"Response validation failed: {validation_result['reason']}")
+                return {"success": False, "error": validation_result["reason"]}
+            
             return {
                 "success": True,
                 "content": content,
-                "usage": usage
+                "usage": usage,
+                "finish_reason": finish_reason
             }
         except (KeyError, IndexError) as e:
             # 에러 시 응답 내용 로깅
@@ -150,6 +168,38 @@ class LLMClient:
                 "success": False,
                 "error": f"Response parsing failed: {e}"
             }
+    
+    def _validate_response_content(self, content: str) -> Dict[str, Any]:
+        """
+        응답 내용의 완전성을 검증합니다.
+        
+        Returns:
+            {"valid": bool, "reason": str}
+        """
+        # 1. 최소 길이 체크
+        MIN_CONTENT_LENGTH = 100
+        if len(content) < MIN_CONTENT_LENGTH:
+            return {"valid": False, "reason": f"Response too short ({len(content)} chars)"}
+        
+        # 2. 필수 섹션 존재 여부 체크 (프롬프트 템플릿에 정의된 섹션)
+        required_markers = ["3줄 요약", "요약"]  # 최소한 하나는 포함되어야 함
+        has_required = any(marker in content for marker in required_markers)
+        if not has_required:
+            return {"valid": False, "reason": "Response missing required sections"}
+        
+        # 3. 응답이 중간에 끊긴 패턴 체크
+        incomplete_patterns = [
+            content.endswith("..."),
+            content.endswith(".."),
+            content.strip().endswith("-"),
+            content.count("###") < 2,  # 최소 2개 섹션 헤더 필요
+        ]
+        
+        # 너무 많은 패턴이 매치되면 불완전할 가능성
+        if sum(incomplete_patterns) >= 2:
+            return {"valid": False, "reason": "Response appears to be incomplete"}
+        
+        return {"valid": True, "reason": ""}
 
     def _parse_response_text(self, text: str) -> Dict[str, Any]:
         """

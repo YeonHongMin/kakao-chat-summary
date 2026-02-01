@@ -13,13 +13,17 @@ full_yesterday_summary.py - 전체 기간 대화 요약 모듈
 
 import sys
 import io
+from pathlib import Path
+
+# 상위 디렉터리 모듈 import를 위한 경로 추가
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Windows 콘솔 인코딩 문제 해결 (cp949 -> utf-8)
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
 from full_config import config, LLM_PROVIDERS

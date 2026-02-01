@@ -1,5 +1,15 @@
 # Core
 requests>=2.31.0
+python-dotenv>=1.0.0
+
+# UI
+PySide6>=6.6.0
+
+# Database
+SQLAlchemy>=2.0.0
+
+# Scheduler
+APScheduler>=3.10.0
 
 # Development
 pytest>=7.4.0

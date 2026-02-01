@@ -11,8 +11,12 @@ full_today_summary.py - 오늘 날짜 대화 요약 모듈
 """
 
 import sys
-from datetime import datetime
 from pathlib import Path
+
+# 상위 디렉터리 모듈 import를 위한 경로 추가
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from datetime import datetime
 from typing import Optional, List
 
 from full_config import config, LLM_PROVIDERS

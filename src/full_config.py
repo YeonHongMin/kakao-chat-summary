@@ -15,6 +15,22 @@ import logging
 from pathlib import Path
 
 CURRENT_DIR = Path(__file__).resolve().parent
+BASE_DIR = CURRENT_DIR.parent
+
+# .env.local 파일 로드 (프로젝트 루트에서)
+try:
+    from dotenv import load_dotenv
+    
+    # 우선순위: .env.local > .env
+    env_local = BASE_DIR / '.env.local'
+    env_file = BASE_DIR / '.env'
+    
+    if env_local.exists():
+        load_dotenv(env_local, override=True)
+    elif env_file.exists():
+        load_dotenv(env_file, override=True)
+except ImportError:
+    pass  # python-dotenv가 설치되지 않은 경우 환경변수만 사용
 
 
 @dataclass

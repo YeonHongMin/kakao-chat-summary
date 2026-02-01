@@ -2002,7 +2002,12 @@ class MainWindow(QMainWindow):
         )
         if dialog.exec() != QDialog.Accepted:
             return
-        
+
+        # 즉시 로딩 상태 표시
+        self.generate_btn.setEnabled(False)
+        self._update_status("⏳ 요약 준비 중...", "working")
+        QApplication.processEvents()
+
         summary_type = dialog.summary_type
         skip_existing = dialog.skip_existing
         selected_llm = dialog.selected_llm
@@ -2024,9 +2029,8 @@ class MainWindow(QMainWindow):
         )
         
         # 프로그레스 표시
-        self._update_status(f"{llm_display_name} 요약 생성 중...", "working")
-        self.generate_btn.setEnabled(False)
-        
+        self._update_status(f"⏳ {llm_display_name} 요약 생성 중...", "working")
+
         # 백그라운드 워커 시작
         self.summary_worker = SummaryGeneratorWorker(
             self.current_room_id, 

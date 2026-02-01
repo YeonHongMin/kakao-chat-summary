@@ -20,11 +20,10 @@ BASE_DIR = CURRENT_DIR.parent
 # .env.local 파일 로드 (프로젝트 루트에서)
 try:
     from dotenv import load_dotenv
-    
-    # 우선순위: .env.local > .env
+
     env_local = BASE_DIR / '.env.local'
     env_file = BASE_DIR / '.env'
-    
+    # 우선순위: .env.local > .env
     if env_local.exists():
         load_dotenv(env_local, override=True)
     elif env_file.exists():

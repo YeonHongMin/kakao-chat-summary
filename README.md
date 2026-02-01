@@ -73,12 +73,11 @@ pip install -r requirements.txt
 ```
 
 ### 3. API 키 설정
-```bash
-# env.local.example을 복사하여 .env.local 생성
-cp env.local.example .env.local
+`.env.local`은 **env.local.example**을 기준으로 만듭니다.  
+앱을 처음 실행하면 `.env.local`이 없을 경우 `env.local.example`을 복사해 자동 생성됩니다.  
+생성된 `.env.local`을 열어 사용할 LLM의 API 키만 입력하면 됩니다.
 
-# .env.local 파일을 열어 API 키 설정
-```
+(수동으로 만들려면: `cp env.local.example .env.local`)
 
 `.env.local` 예시:
 ```env

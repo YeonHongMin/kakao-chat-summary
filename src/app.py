@@ -6,10 +6,19 @@
 """
 import sys
 import os
+import shutil
 from pathlib import Path
 
 # 프로젝트 루트를 Python 경로에 추가
-sys.path.insert(0, str(Path(__file__).parent))
+_here = Path(__file__).resolve().parent
+sys.path.insert(0, str(_here))
+_base = _here.parent
+
+# 앱 기동 시 .env.local이 없으면 env.local.example을 복사하여 생성
+_env_local = _base / ".env.local"
+_env_example = _base / "env.local.example"
+if not _env_local.exists() and _env_example.exists():
+    shutil.copy2(_env_example, _env_local)
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt

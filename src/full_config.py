@@ -122,12 +122,25 @@ class Config:
     def get_provider_info(self) -> LLMProvider:
         return LLM_PROVIDERS[self.current_provider]
 
+    @staticmethod
+    def _is_placeholder(key: Optional[str]) -> bool:
+        """API 키가 placeholder인지 확인"""
+        if not key:
+            return True
+        stripped = key.strip()
+        if not stripped:
+            return True
+        lower = stripped.lower()
+        return 'your_' in lower and '_here' in lower
+
     def get_api_key(self, provider: Optional[str] = None) -> Optional[str]:
         provider = provider or self.current_provider
         provider_info = LLM_PROVIDERS[provider]
         if provider in self._api_keys and self._api_keys[provider]:
-            return self._api_keys[provider]
-        return os.getenv(provider_info.env_key)
+            key = self._api_keys[provider]
+            return None if self._is_placeholder(key) else key
+        key = os.getenv(provider_info.env_key)
+        return None if self._is_placeholder(key) else key
 
     def set_api_key(self, api_key: str, provider: Optional[str] = None) -> None:
         provider = provider or self.current_provider

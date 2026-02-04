@@ -107,6 +107,12 @@ data/
 | 환경 설정 | python-dotenv |
 | 파일 처리 | pathlib |
 | 로깅 | logging (logs/ 디렉터리에 날짜별 상세 기록) |
+| 스레드 안전 | 워커별 독립 DB 인스턴스 (v2.4.0) |
+
+### 4.2 스레드 안전성 (v2.4.0)
+- **백그라운드 워커**(`FileUploadWorker`, `SyncWorker`, `SummaryGeneratorWorker`)는 각각 독립적인 `Database()` 인스턴스를 생성하여 사용
+- 싱글톤 `get_db()` 공유로 인한 SQLite 동시 접근 충돌 방지
+- 작업 완료 후 `engine.dispose()`로 명시적 연결 해제
 
 ---
 

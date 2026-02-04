@@ -39,10 +39,12 @@ data/*
 !data/original/
 !data/summary/
 !data/url/
+!data/backup/
 data/db/*
 data/original/*
 data/summary/*
 data/url/*
+data/backup/*
 !data/db/.gitkeep
 !data/original/.gitkeep
 !data/summary/.gitkeep

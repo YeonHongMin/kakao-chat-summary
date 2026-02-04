@@ -261,18 +261,23 @@ class Database:
                      message_count: int = 0, new_message_count: int = 0,
                      error_message: Optional[str] = None) -> SyncLog:
         """동기화 로그 추가."""
-        with self.get_session() as session:
-            log = SyncLog(
-                room_id=room_id,
-                status=status,
-                message_count=message_count,
-                new_message_count=new_message_count,
-                error_message=error_message
-            )
-            session.add(log)
-            session.flush()
-            log_id = log.id
-        return log_id
+        try:
+            with self.get_session() as session:
+                log = SyncLog(
+                    room_id=room_id,
+                    status=status,
+                    message_count=message_count,
+                    new_message_count=new_message_count,
+                    error_message=error_message
+                )
+                session.add(log)
+                session.flush()
+                log_id = log.id
+            return log_id
+        except Exception as e:
+            # 로깅 실패는 치명적이지 않으므로 무시 (DB 손상 방지)
+            print(f"⚠️ [DB Warning] Failed to add sync log: {e}")
+            return -1
     
     def get_sync_logs_by_room(self, room_id: int, limit: int = 10) -> List[SyncLog]:
         """채팅방의 동기화 로그 조회."""

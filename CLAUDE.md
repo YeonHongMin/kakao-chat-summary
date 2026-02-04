@@ -14,8 +14,8 @@
 | **언어** | Python 3.11+ |
 | **GUI** | PySide6 (Qt for Python) |
 | **DB** | SQLite + SQLAlchemy ORM |
-| **버전** | v2.3.1 |
-| **최종 업데이트** | 2026-02-02 |
+| **버전** | v2.5.0 |
+| **최종 업데이트** | 2026-02-04 |
 
 ---
 
@@ -529,4 +529,76 @@ DB에 데이터가 있어도 파일이 없으면 재수집 대상이며, DB 저�
 
 ---
 
-*마지막 업데이트: 2026-02-02 | 버전: v2.3.1*
+### v2.4.0 - 데이터 안전성 및 견고성 강화 (2026-02-04)
+
+**이슈 1: 채팅 데이터 로드 시 기존 데이터 삭제 (Data Loss)**
+- **증상**: 채팅 파일 재업로드 시 기존 데이터가 사라지는 현상
+- **원인**: `save_daily_original`에서 파싱 실패(0건) 또는 단순 병합 시 데이터 감소(파싱 포맷 차이 등)를 체크하지 않고 덮어씀
+- **수정**:
+  - `file_storage.py`: 기존 파일이 존재하는데 파싱 결과가 0건이면 원본 내용을 read_text로 복구
+  - 병합 결과가 기존 데이터보다 적으면(`merged < existing`) 저장을 건너뛰는(Skip) 안전 장치 추가
+
+**이슈 2: 요약 파일 대량 삭제 (Summary Invalidation)**
+- **증상**: 업로드 시 모든 날짜의 요약 파일이 삭제됨
+- **원인**: 메시지 데이터가 소량 변경(+1건)되거나 이전 불완전 데이터(134건)가 완전한 데이터(452건)로 바뀔 때 무조건 `New > Old` 조건으로 삭제(`unlink`)
+- **수정**:
+  - `file_storage.py`: `delete_daily_summary`를 `.bak` 파일로 리네임하는 백업 로직으로 변경 (영구 삭제 방지)
+
+**이슈 3: DB 파일 손상 (Database Corruption) - 근본 원인 수정**
+- **증상**: `sqlalchemy.exc.DatabaseError: database disk image is malformed` 발생 (LLM 요약 중 특히 빈번)
+- **근본 원인**: **워커 스레드들이 싱글톤 `get_db()` 인스턴스를 공유**
+  - `FileUploadWorker`, `SyncWorker`, `SummaryGeneratorWorker`가 모두 `__init__`에서 `self.db = get_db()`로 동일한 DB 인스턴스를 가져감
+  - 워커 스레드가 DB 쓰기(`add_messages`, `add_summary`)를 하는 동안, 메인 UI 스레드도 DB 읽기(`get_all_rooms`, `get_room_stats`)를 수행
+  - SQLite는 **단일 쓰기자(Single Writer)** 모델이므로, 동시 접근 시 `SQLITE_BUSY` 또는 저널 파일 충돌로 DB 손상 발생
+- **수정**:
+  - `main_window.py`: 각 워커 클래스의 `run()` 메서드 내에서 **전용 `Database()` 인스턴스**를 생성하도록 변경
+  - 작업 완료 후 `worker_db.engine.dispose()`로 연결을 명시적으로 해제
+  - 수정된 워커: `FileUploadWorker`, `SyncWorker`, `SummaryGeneratorWorker`
+- **추가 방어**:
+  - `llm_client.py`: API 500/Network 에러 시 최대 3회 재시도(Exponential Backoff) 로직 추가
+  - `database.py`: `add_sync_log` 등 주요 쓰기 메서드에 `try-except` 블록을 씌워 로깅 실패가 앱 충돌로 이어지지 않도록 방어
+
+**이슈 4: 앱 강제 종료 (App Crash)**
+- **증상**: 요약 생성 도중 또는 파일 업로드 중 앱이 응답 없음 상태가 되거나 강제 종료됨 (특히 MiniMax 모델 사용 시에도 발생)
+- **원인**: 디버깅을 위해 추가한 `print()` 문이 반복문 내에서 수천 번 실행되면서 콘솔 출력 버퍼 오버플로우 또는 Windows 콘솔 I/O 블로킹 유발 (UI 스레드와 워커 스레드 간 간섭 심화)
+- **수정**:
+  - `main_window.py`: 반복문 내의 디버그용 `print()` 구문 전면 제거
+
+**이슈 5: 파일 재업로드 시 모든 요약 삭제 (Mass Invalidation)**
+- **증상**: 파일을 재업로드하면 오늘만이 아니라 **모든 날짜**의 요약이 무효화됨
+- **원인**: 메시지 수 비교 방식의 부정확성 (포맷 차이로 인한 오감지)
+- **수정**: **파일 크기 비교 방식**으로 변경
+  - `file_storage.py`: `get_original_file_size()`, `invalidate_summary_if_file_changed()` 추가
+  - `main_window.py`: `FileUploadWorker`가 저장 전/후 파일 크기를 비교하여 실제 변경된 날짜만 무효화
+  - **효과**: 파일 내용이 동일하면 크기가 동일 → 요약 유지 ✅
+
+---
+
+## ⚠️ 개발 시 주의사항
+
+### 코드 변경 후 재기동
+- **LLM 요약 수집 중일 때는 앱 종료 전 요약 완료를 기다려야 함**
+- `closeEvent`에서 요약 진행 중이면 확인 다이얼로그를 표시하고, `worker.cancel()` + `wait(5000)`으로 안전하게 종료
+- 요약 중간에 강제 종료하면 일부 날짜의 요약이 유실될 수 있음
+
+### 백업/복원 기능 (v2.5.0)
+
+**도구 메뉴 구조:**
+```
+도구
+├── 💾 전체 백업... (Ctrl+B)     - DB + 모든 파일 백업
+├── 💾 채팅방 백업...            - 선택된 채팅방만 백업
+├── ─────────────
+├── 📂 백업에서 복원...          - 백업에서 전체/개별 채팅방 복원
+├── ─────────────
+├── 🔄 파일에서 DB 재구축...     - 현재 파일에서 DB 재생성 (파괴적)
+├── 🔄 누락 채팅방 DB 추가...    - 파일에는 있지만 DB에 없는 채팅방 추가
+```
+
+**용어 정리:**
+- **백업/복원**: `data/backup/` 스냅샷 관리
+- **재구축/DB 추가**: 현재 `data/original/`, `data/summary/` ↔ DB 동기화
+
+---
+
+*마지막 업데이트: 2026-02-04 | 버전: v2.5.0*

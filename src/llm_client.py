@@ -91,37 +91,55 @@ class LLMClient:
             ]
         }
 
-        try:
-            self.logger.info(f"[{self.provider_info.name}] Sending request...")
-            
-            # ChatGPT 요청 시간 기록
-            if config.current_provider == "chatgpt":
-                LLMClient._last_chatgpt_request_time = time.time()
-            
-            # 스트리밍으로 응답 받기 (연결 60초, 읽기 600초)
-            response = requests.post(
-                self.provider_info.api_url,
-                headers=headers,
-                json=payload,
-                timeout=(60, 600),  # (connect_timeout, read_timeout)
-                stream=True
-            )
-            
-            if response.status_code != 200:
-                error_msg = f"API Error {response.status_code}: {response.text}"
-                self.logger.error(error_msg)
-                return {"success": False, "error": error_msg}
-            
-            # 스트리밍 응답을 한번에 읽음
-            content = response.content.decode('utf-8')
-            return self._parse_response_text(content)
-            
-        except requests.exceptions.Timeout:
-            self.logger.error("Request timed out.")
-            return {"success": False, "error": "Request timed out."}
-        except Exception as e:
-            self.logger.exception("An unexpected error occurred during API call.")
-            return {"success": False, "error": str(e)}
+        # [Retry Logic] 최대 3회 재시도
+        max_retries = 3
+        retry_delay = 2  # 초기 대기 시간 (초)
+        
+        for attempt in range(max_retries):
+            try:
+                self.logger.info(f"[{self.provider_info.name}] Sending request (Attempt {attempt+1}/{max_retries})...")
+                
+                # ChatGPT 요청 시간 기록
+                if config.current_provider == "chatgpt":
+                    LLMClient._last_chatgpt_request_time = time.time()
+                
+                # 스트리밍으로 응답 받기 (연결 60초, 읽기 600초)
+                response = requests.post(
+                    self.provider_info.api_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=(60, 600),  # (connect_timeout, read_timeout)
+                    stream=True
+                )
+                
+                if response.status_code == 200:
+                    # 성공 시 루프 탈출
+                    content = response.content.decode('utf-8')
+                    return self._parse_response_text(content)
+                elif response.status_code >= 500:
+                    # 500번대 에러는 재시도
+                    error_msg = f"API Error {response.status_code}: {response.text}"
+                    self.logger.warning(f"{error_msg}. Retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # 지수 백오프
+                    continue
+                else:
+                    # 400번대 에러는 즉시 실패 (재시도 불가)
+                    error_msg = f"API Error {response.status_code}: {response.text}"
+                    self.logger.error(error_msg)
+                    return {"success": False, "error": error_msg}
+
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                self.logger.warning(f"Network Error: {str(e)}. Retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+                retry_delay *= 2
+                continue
+            except Exception as e:
+                self.logger.exception("An unexpected error occurred during API call.")
+                return {"success": False, "error": str(e)}
+        
+        # 모든 재시도 실패
+        return {"success": False, "error": f"Failed after {max_retries} retries."}
 
     def _parse_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """

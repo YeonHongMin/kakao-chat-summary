@@ -139,8 +139,14 @@ sys.exit(app.exec())
 | `get_available_dates(room)` | 원본 존재 날짜 목록 |
 | `get_summarized_dates(room)` | 요약 존재 날짜 목록 |
 | `get_dates_needing_summary(room)` | 요약 필요 날짜 (신규/업데이트) |
-| `invalidate_summary_if_updated(room, date, old, new)` | 업데이트 시 요약 무효화 |
-| `get_all_rooms()` | 모든 채팅방 목록 (original/summary/url 디렉터리 스캔) |
+| `get_original_file_size(room, date)` | 원본 파일 크기 (바이트) |
+| `invalidate_summary_if_file_changed(room, date, old_size, new_size)` | 파일 크기 변경 시 요약 무효화 |
+| `get_all_rooms()` | 모든 채팅방 목록 (디렉터리 스캔) |
+| `create_full_backup()` | 전체 백업 (DB + 모든 파일) (v2.4.0) |
+| `get_backup_list()` | 백업 목록 조회 (v2.4.0) |
+| `backup_room(room)` | 개별 채팅방 백업 (v2.5.0) |
+| `get_rooms_in_backup(backup_path)` | 백업 내 채팅방 목록 (v2.5.0) |
+| `restore_from_backup(backup_path, room=None)` | 백업에서 복원 (v2.5.0) |
 
 ---
 

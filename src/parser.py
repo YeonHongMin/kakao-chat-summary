@@ -64,7 +64,10 @@ class KakaoLogParser:
         Returns:
             ParseResult: 파싱 결과 (날짜별 메시지 딕셔너리와 총 날짜 수)
         """
-        text = filepath.read_text(encoding='utf-8')
+        try:
+            text = filepath.read_text(encoding='utf-8')
+        except UnicodeDecodeError:
+            text = filepath.read_text(encoding='cp949', errors='replace')
         lines = text.splitlines()
         
         messages_by_date = defaultdict(list)

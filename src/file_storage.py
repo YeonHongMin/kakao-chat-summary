@@ -79,7 +79,7 @@ class FileStorage:
         
         # [Safety Check] 병합된 데이터가 기존 데이터보다 적으면 저장하지 않음 (삭제 방지)
         if len(merged_messages) < len(existing_messages):
-            print(f"⚠️ [Warning] 데이터 감소 감지: 기존 {len(existing_messages)}개 -> 병합 {len(merged_messages)}개. 저장을 건너뜁니다.")
+            print(f"[Warning] 데이터 감소 감지: 기존 {len(existing_messages)}개 -> 병합 {len(merged_messages)}개. 저장을 건너뜁니다.")
             return filepath
 
         # 파일 저장
@@ -206,7 +206,7 @@ class FileStorage:
             backup_path = filepath.with_suffix('.md.bak')
             import shutil
             shutil.move(str(filepath), str(backup_path))
-            print(f"📦 [Backup] 요약 파일 백업됨: {backup_path.name}")
+            print(f"[Backup] 요약 파일 백업됨: {backup_path.name}")
             return True
         return False
     
@@ -614,11 +614,11 @@ class FileStorage:
             if self.url_dir.exists():
                 shutil.copytree(self.url_dir, backup_dir / "url")
             
-            print(f"✅ 백업 완료: {backup_dir}")
+            print(f"[OK] 백업 완료: {backup_dir}")
             return backup_dir
             
         except Exception as e:
-            print(f"❌ 백업 실패: {e}")
+            print(f"[ERROR] 백업 실패: {e}")
             # 실패 시 부분 백업 디렉터리 삭제
             if backup_dir.exists():
                 shutil.rmtree(backup_dir, ignore_errors=True)
@@ -691,11 +691,11 @@ class FileStorage:
             if url_room.exists():
                 shutil.copytree(url_room, backup_dir / "url" / sanitized)
             
-            print(f"✅ 채팅방 백업 완료: {backup_dir}")
+            print(f"[OK] 채팅방 백업 완료: {backup_dir}")
             return backup_dir
             
         except Exception as e:
-            print(f"❌ 채팅방 백업 실패: {e}")
+            print(f"[ERROR] 채팅방 백업 실패: {e}")
             if backup_dir.exists():
                 shutil.rmtree(backup_dir, ignore_errors=True)
             return None
@@ -748,7 +748,7 @@ class FileStorage:
                             shutil.rmtree(dst)
                         shutil.copytree(src, dst)
                 
-                print(f"✅ 채팅방 복원 완료: {room_name}")
+                print(f"[OK] 채팅방 복원 완료: {room_name}")
             else:
                 # 전체 복원
                 for subdir in ['original', 'summary', 'url']:
@@ -767,12 +767,12 @@ class FileStorage:
                         db_dst.unlink()
                     shutil.copy2(db_src, db_dst)
                 
-                print(f"✅ 전체 복원 완료: {backup_path}")
+                print(f"[OK] 전체 복원 완료: {backup_path}")
             
             return True
             
         except Exception as e:
-            print(f"❌ 복원 실패: {e}")
+            print(f"[ERROR] 복원 실패: {e}")
             return False
 
 

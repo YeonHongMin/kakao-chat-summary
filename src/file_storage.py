@@ -18,6 +18,7 @@ file_storage.py - 일별 파일 저장 모듈
 
 import os
 import re
+import hashlib
 from pathlib import Path
 from datetime import datetime, date
 from typing import Dict, List, Optional, Set
@@ -76,14 +77,26 @@ class FileStorage:
 
         # 중복 제거 및 merge
         merged_messages = self._merge_messages(existing_messages, messages)
-        
-        # [Safety Check] 병합된 데이터가 기존 데이터보다 적으면 저장하지 않음 (삭제 방지)
+
+        # [Safety Check 1] 병합된 데이터가 기존 데이터보다 적으면 저장하지 않음 (삭제 방지)
         if len(merged_messages) < len(existing_messages):
-            print(f"[Warning] 데이터 감소 감지: 기존 {len(existing_messages)}개 -> 병합 {len(merged_messages)}개. 저장을 건너뜁니다.")
+            print(f"⚠️ [Warning] 데이터 감소 감지 (개수): 기존 {len(existing_messages)}개 -> 병합 {len(merged_messages)}개. 저장을 건너뜁니다.")
             return filepath
 
-        # 파일 저장
+        # 파일 저장 준비
         content = self._format_original_content(room_name, date_str, merged_messages)
+
+        # [Safety Check 2] 신규 파일 크기가 기존 파일의 80% 미만이면 저장하지 않음 (부분 파일 방지)
+        if filepath.exists():
+            old_size = filepath.stat().st_size
+            new_size = len(content.encode('utf-8'))
+            size_ratio = new_size / old_size if old_size > 0 else 1.0
+
+            if size_ratio < 0.8:  # 20% 이상 감소
+                print(f"⚠️ [Warning] 파일 크기 감소 감지: 기존 {old_size:,}B -> 신규 {new_size:,}B ({size_ratio:.1%}). 저장을 건너뜁니다.")
+                return filepath
+
+        # 파일 저장
         filepath.write_text(content, encoding='utf-8')
         
         return filepath
@@ -206,7 +219,7 @@ class FileStorage:
             backup_path = filepath.with_suffix('.md.bak')
             import shutil
             shutil.move(str(filepath), str(backup_path))
-            print(f"[Backup] 요약 파일 백업됨: {backup_path.name}")
+            print(f"📦 [Backup] 요약 파일 백업됨: {backup_path.name}")
             return True
         return False
     
@@ -293,31 +306,84 @@ class FileStorage:
 
         return result
     
-    def invalidate_summary_if_file_changed(self, room_name: str, date_str: str, 
-                                            old_size: int, new_size: int) -> bool:
+    def invalidate_summary_if_content_changed(self, room_name: str, date_str: str,
+                                               old_hash: str, new_hash: str,
+                                               old_count: int = 0, new_count: int = 0,
+                                               threshold: int = 50) -> bool:
         """
-        원본 파일 크기가 변경되면 기존 요약 무효화.
-        
+        메시지 내용이 크게 변경된 경우에만 기존 요약 무효화.
+
+        헤더(저장 시각 등)가 아닌 실제 메시지 내용만 비교하고,
+        메시지 개수 차이가 임계값 이상일 때만 요약을 무효화합니다.
+
+        사용자 나가기/들어오기 등 작은 변경(시스템 메시지 1-2개)은 무시하고,
+        실제 대화가 많이 추가된 경우(50개 이상)에만 재수집합니다.
+
         Args:
             room_name: 채팅방 이름
             date_str: 날짜 (YYYY-MM-DD)
-            old_size: 저장 전 파일 크기 (바이트)
-            new_size: 저장 후 파일 크기 (바이트)
-        
+            old_hash: 저장 전 메시지 내용 해시
+            new_hash: 저장 후 메시지 내용 해시
+            old_count: 저장 전 메시지 개수
+            new_count: 저장 후 메시지 개수
+            threshold: 메시지 개수 변경 임계값 (기본 50개)
+
         Returns:
             True if summary was invalidated
         """
-        if old_size != new_size and self.has_summary(room_name, date_str):
+        # 해시 동일 → 변경 없음
+        if old_hash == new_hash:
+            return False
+
+        # 이전 데이터 없음 (새 날짜) → 무효화 불필요
+        if not old_hash:
+            return False
+
+        # 메시지 개수 차이 계산
+        diff = new_count - old_count if old_count > 0 else new_count
+
+        # 1. 증가가 임계값 미만 → 작은 변경 (사용자 나가기, 시스템 메시지 등) → 무시
+        if 0 <= diff < threshold:
+            if diff > 0:
+                print(f"ℹ️  [{date_str}] 메시지 +{diff}개 (< {threshold}개) → 요약 유지")
+            return False
+
+        # 2. 증가가 임계값 이상 → 대량 추가 → 무효화
+        if diff >= threshold and self.has_summary(room_name, date_str):
             self.delete_daily_summary(room_name, date_str)
+            print(f"🔄 [{date_str}] 메시지 +{diff}개 (≥ {threshold}개, 대량 추가) → 요약 무효화")
             return True
+
+        # 3. 감소 → 파일 손상/부분 업로드 → 경고만 출력, 요약 유지
+        if diff < 0:
+            print(f"⚠️  [{date_str}] 메시지 {diff}개 (데이터 감소) → 요약 유지 (새 파일 무시됨)")
+            return False
+
         return False
-    
+
+    def get_original_content_hash(self, room_name: str, date_str: str) -> str:
+        """원본 메시지 내용의 해시값 반환. 헤더/푸터 제외, 메시지만 해시."""
+        messages = self.load_daily_original(room_name, date_str)
+        if not messages:
+            return ""
+        content = "\n".join(msg.strip() for msg in messages)
+        return hashlib.md5(content.encode('utf-8')).hexdigest()
+
     def get_original_file_size(self, room_name: str, date_str: str) -> int:
         """원본 파일 크기 반환 (바이트). 파일이 없으면 0."""
         filepath = self._get_original_path(room_name, date_str)
         if filepath.exists():
             return filepath.stat().st_size
         return 0
+
+    # Legacy: 파일 크기 기반 (하위 호환용, deprecated)
+    def invalidate_summary_if_file_changed(self, room_name: str, date_str: str,
+                                            old_size: int, new_size: int) -> bool:
+        """[Deprecated] 메시지 해시 기반인 invalidate_summary_if_content_changed() 사용 권장."""
+        if old_size != new_size and self.has_summary(room_name, date_str):
+            self.delete_daily_summary(room_name, date_str)
+            return True
+        return False
     
     # Legacy: 메시지 수 기반 (하위 호환용, deprecated)
     def invalidate_summary_if_updated(self, room_name: str, date_str: str, 
@@ -385,16 +451,17 @@ class FileStorage:
     
     def _merge_messages(self, existing: List[str], new: List[str]) -> List[str]:
         """기존 메시지와 새 메시지 merge (중복 제거)."""
-        # 메시지를 해시로 관리하여 중복 제거
+        # 메시지를 안정적인 MD5 해시로 관리하여 중복 제거
         seen = set()
         merged = []
-        
+
         for msg in existing + new:
-            msg_hash = hash(msg.strip())
+            # 안정적인 해시 함수 사용 (프로세스 무관)
+            msg_hash = hashlib.md5(msg.strip().encode('utf-8')).hexdigest()
             if msg_hash not in seen:
                 seen.add(msg_hash)
                 merged.append(msg)
-        
+
         return merged
     
     def _format_original_content(self, room_name: str, date_str: str, 
@@ -614,11 +681,11 @@ class FileStorage:
             if self.url_dir.exists():
                 shutil.copytree(self.url_dir, backup_dir / "url")
             
-            print(f"[OK] 백업 완료: {backup_dir}")
+            print(f"✅ 백업 완료: {backup_dir}")
             return backup_dir
             
         except Exception as e:
-            print(f"[ERROR] 백업 실패: {e}")
+            print(f"❌ 백업 실패: {e}")
             # 실패 시 부분 백업 디렉터리 삭제
             if backup_dir.exists():
                 shutil.rmtree(backup_dir, ignore_errors=True)
@@ -691,11 +758,11 @@ class FileStorage:
             if url_room.exists():
                 shutil.copytree(url_room, backup_dir / "url" / sanitized)
             
-            print(f"[OK] 채팅방 백업 완료: {backup_dir}")
+            print(f"✅ 채팅방 백업 완료: {backup_dir}")
             return backup_dir
             
         except Exception as e:
-            print(f"[ERROR] 채팅방 백업 실패: {e}")
+            print(f"❌ 채팅방 백업 실패: {e}")
             if backup_dir.exists():
                 shutil.rmtree(backup_dir, ignore_errors=True)
             return None
@@ -748,7 +815,7 @@ class FileStorage:
                             shutil.rmtree(dst)
                         shutil.copytree(src, dst)
                 
-                print(f"[OK] 채팅방 복원 완료: {room_name}")
+                print(f"✅ 채팅방 복원 완료: {room_name}")
             else:
                 # 전체 복원
                 for subdir in ['original', 'summary', 'url']:
@@ -767,12 +834,12 @@ class FileStorage:
                         db_dst.unlink()
                     shutil.copy2(db_src, db_dst)
                 
-                print(f"[OK] 전체 복원 완료: {backup_path}")
+                print(f"✅ 전체 복원 완료: {backup_path}")
             
             return True
             
         except Exception as e:
-            print(f"[ERROR] 복원 실패: {e}")
+            print(f"❌ 복원 실패: {e}")
             return False
 
 

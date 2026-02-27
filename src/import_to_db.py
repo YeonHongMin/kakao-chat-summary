@@ -138,15 +138,16 @@ class DataImporter:
         """디렉토리 내 모든 txt 파일을 DB에 저장."""
         results = []
         
-        # txt 파일 필터링 (요약 파일 제외)
-        txt_files = [
-            f for f in directory.glob("*.txt")
-            if "_summary" not in f.name 
+        # txt, csv 파일 필터링 (요약 파일 제외)
+        chat_files = [
+            f for f in directory.iterdir()
+            if f.is_file() and f.suffix.lower() in ['.txt', '.csv']
+            and "_summary" not in f.name 
             and "_url" not in f.name
             and "_summaries" not in f.name
         ]
         
-        if not txt_files:
+        if not chat_files:
             print("❌ 처리할 파일이 없습니다.")
             return results
         
@@ -154,10 +155,10 @@ class DataImporter:
         print("📥 데이터 일괄 가져오기")
         print("="*60)
         print(f"📂 디렉토리: {directory}")
-        print(f"📄 파일 수: {len(txt_files)}개")
+        print(f"📄 파일 수: {len(chat_files)}개")
         print("="*60 + "\n")
         
-        for filepath in sorted(txt_files):
+        for filepath in sorted(chat_files):
             print(f"📄 처리 중: {filepath.name}")
             result = self.import_file(filepath)
             results.append(result)

@@ -95,27 +95,34 @@ class FileUploadWorker(QThread):
             parser = KakaoLogParser()
             parse_result = parser.parse(self.file_path)
             
-            # 4. 기존 파일 크기 저장 (요약 무효화 체크용)
+            # 4. 기존 메시지 해시 및 개수 저장 (요약 무효화 체크용)
             self.progress.emit(35, "기존 데이터 확인 중...")
-            old_file_sizes = {}
+            old_content_hashes = {}
+            old_message_counts = {}
             for date_str in parse_result.messages_by_date.keys():
-                old_file_sizes[date_str] = self.storage.get_original_file_size(room_name, date_str)
-            
+                old_content_hashes[date_str] = self.storage.get_original_content_hash(room_name, date_str)
+                old_message_counts[date_str] = len(self.storage.load_daily_original(room_name, date_str))
+
             # 5. 일별 파일 저장 (original) - 중복은 자동 merge
             self.progress.emit(40, "일별 파일 저장 중...")
             saved_files = self.storage.save_all_daily_originals(
-                room_name, 
+                room_name,
                 parse_result.messages_by_date
             )
-            
-            # 6. 파일 크기 변경된 날짜의 요약 무효화
+
+            # 6. 메시지 개수 차이가 큰 경우에만 요약 무효화 (임계값: 50개)
             self.progress.emit(50, "요약 상태 확인 중...")
             invalidated_dates = []
             for date_str in parse_result.messages_by_date.keys():
-                old_size = old_file_sizes.get(date_str, 0)
-                new_size = self.storage.get_original_file_size(room_name, date_str)
-                
-                if self.storage.invalidate_summary_if_file_changed(room_name, date_str, old_size, new_size):
+                old_hash = old_content_hashes.get(date_str, "")
+                new_hash = self.storage.get_original_content_hash(room_name, date_str)
+                old_count = old_message_counts.get(date_str, 0)
+                new_count = len(self.storage.load_daily_original(room_name, date_str))
+
+                if self.storage.invalidate_summary_if_content_changed(
+                    room_name, date_str, old_hash, new_hash,
+                    old_count, new_count, threshold=50
+                ):
                     invalidated_dates.append(date_str)
             
             # 7. 메시지 추출 및 DB 저장
@@ -1193,7 +1200,7 @@ class UploadFileDialog(QDialog):
         file_path, _ = QFileDialog.getOpenFileName(
             self, "카카오톡 대화 파일 선택",
             str(upload_dir),
-            "텍스트 파일 (*.txt)"
+            "대화 파일 (*.txt *.csv)"
         )
         if file_path:
             self.file_path = file_path

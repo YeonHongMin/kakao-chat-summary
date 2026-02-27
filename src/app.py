@@ -9,11 +9,6 @@ import os
 import shutil
 from pathlib import Path
 
-# Windows 콘솔 UTF-8 출력 설정 (cp949 인코딩 에러 방지)
-if sys.platform == 'win32':
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
-
 # 프로젝트 루트를 Python 경로에 추가
 _here = Path(__file__).resolve().parent
 sys.path.insert(0, str(_here))

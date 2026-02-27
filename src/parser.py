@@ -16,6 +16,7 @@ from datetime import datetime
 from collections import defaultdict
 from pathlib import Path
 from dataclasses import dataclass
+import csv
 
 
 @dataclass
@@ -56,18 +57,18 @@ class KakaoLogParser:
 
     def parse(self, filepath: Path) -> ParseResult:
         """
-        카카오톡 텍스트 파일을 파싱하여 날짜별 메시지를 추출합니다.
+        카카오톡 텍스트 또는 CSV 파일을 파싱하여 날짜별 메시지를 추출합니다.
         
         Args:
-            filepath: 파싱할 텍스트 파일 경로
+            filepath: 파싱할 텍스트/CSV 파일 경로
             
         Returns:
             ParseResult: 파싱 결과 (날짜별 메시지 딕셔너리와 총 날짜 수)
         """
-        try:
-            text = filepath.read_text(encoding='utf-8')
-        except UnicodeDecodeError:
-            text = filepath.read_text(encoding='cp949', errors='replace')
+        if filepath.suffix.lower() == '.csv':
+            return self._parse_csv(filepath)
+
+        text = filepath.read_text(encoding='utf-8')
         lines = text.splitlines()
         
         messages_by_date = defaultdict(list)
@@ -145,3 +146,52 @@ class KakaoLogParser:
             except (ValueError, IndexError):
                 pass
         return None
+
+    def _parse_csv(self, filepath: Path) -> ParseResult:
+        """
+        Mac용 카카오톡 CSV 내보내기 파일을 파싱합니다.
+        
+        Args:
+            filepath: 파싱할 CSV 파일 경로
+            
+        Returns:
+            ParseResult: 파싱 결과
+        """
+        messages_by_date = defaultdict(list)
+        
+        with filepath.open('r', encoding='utf-8', newline='') as f:
+            reader = csv.reader(f)
+            try:
+                header = next(reader)
+            except StopIteration:
+                pass
+            
+            for row in reader:
+                if len(row) < 3:
+                    continue
+                
+                date_str = row[0]
+                user = row[1]
+                message = row[2]
+                
+                try:
+                    dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
+                except ValueError:
+                    continue
+                
+                date_key = dt.strftime('%Y-%m-%d')
+                
+                am_pm = "오후" if dt.hour >= 12 else "오전"
+                hr = dt.hour % 12
+                if hr == 0:
+                    hr = 12
+                minute = f"{dt.minute:02d}"
+                
+                formatted_line = f"[{user}] [{am_pm} {hr}:{minute}] {message}"
+                messages_by_date[date_key].append(formatted_line)
+                
+        return ParseResult(
+            messages_by_date=dict(messages_by_date),
+            total_dates=len(messages_by_date)
+        )
+

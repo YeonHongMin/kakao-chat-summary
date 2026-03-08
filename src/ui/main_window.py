@@ -258,10 +258,14 @@ class ChatRoomWidget(QFrame):
         self.setObjectName("chatRoomItem")
         self.setProperty("class", "ChatRoomItem")
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(70)
+        self.setFixedHeight(85)
+        
+        from PySide6.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(8)
         
         # 아이콘/아바타 영역
         avatar = QLabel("💬")
@@ -296,7 +300,7 @@ class ChatRoomWidget(QFrame):
                 padding: 2px 6px;
                 border-radius: 10px;
             """)
-            badge.setFixedHeight(18)
+            badge.setFixedHeight(16)
             name_layout.addWidget(badge)
         
         name_layout.addStretch()
@@ -1322,6 +1326,8 @@ class MainWindow(QMainWindow):
         self.room_list_layout = QVBoxLayout(self.room_list_widget)
         self.room_list_layout.setContentsMargins(5, 5, 5, 5)
         self.room_list_layout.setSpacing(5)
+        from PySide6.QtWidgets import QLayout
+        self.room_list_layout.setSizeConstraint(QLayout.SetMinimumSize)
         self.room_list_layout.addStretch()
         
         scroll = QScrollArea()

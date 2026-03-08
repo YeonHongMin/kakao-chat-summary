@@ -1,3 +1,7 @@
+# Broken git / Conflict files
+.git_broken/
+*_Conflict*
+
 # Python
 __pycache__/
 *.py[cod]

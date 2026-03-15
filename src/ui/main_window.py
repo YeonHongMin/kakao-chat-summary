@@ -95,25 +95,41 @@ class FileUploadWorker(QThread):
             parser = KakaoLogParser()
             parse_result = parser.parse(self.file_path)
             
-            # 4. 기존 메시지 해시 및 개수 저장 (요약 무효화 체크용)
+            # 4. 마지막 요약일 기준 cutoff 계산 (이전 날짜는 해시/DB 처리 건너뜀)
             self.progress.emit(35, "기존 데이터 확인 중...")
+            summarized_dates = sorted(self.storage.get_summarized_dates(room_name))
+            if summarized_dates:
+                last_summarized = summarized_dates[-1]
+                last_date = datetime.strptime(last_summarized, '%Y-%m-%d').date()
+                cutoff_str = (last_date - timedelta(days=1)).strftime('%Y-%m-%d')
+            else:
+                cutoff_str = None  # 요약 없으면 모든 날짜 처리
+
+            # cutoff 이후 날짜만 해시/개수 계산
+            recent_dates = [
+                d for d in parse_result.messages_by_date.keys()
+                if cutoff_str is None or d >= cutoff_str
+            ]
+            skipped_dates = len(parse_result.messages_by_date) - len(recent_dates)
+
             old_content_hashes = {}
             old_message_counts = {}
-            for date_str in parse_result.messages_by_date.keys():
+            for date_str in recent_dates:
                 old_content_hashes[date_str] = self.storage.get_original_content_hash(room_name, date_str)
                 old_message_counts[date_str] = len(self.storage.load_daily_original(room_name, date_str))
 
-            # 5. 일별 파일 저장 (original) - 중복은 자동 merge
+            # 5. 일별 파일 저장 (original) - cutoff 이후만 저장, 과거는 보호
             self.progress.emit(40, "일별 파일 저장 중...")
             saved_files = self.storage.save_all_daily_originals(
                 room_name,
-                parse_result.messages_by_date
+                parse_result.messages_by_date,
+                cutoff_date=cutoff_str
             )
 
-            # 6. 메시지 개수 차이가 큰 경우에만 요약 무효화 (임계값: 50개)
+            # 6. 최근 날짜만 요약 무효화 체크 (임계값: 10개)
             self.progress.emit(50, "요약 상태 확인 중...")
             invalidated_dates = []
-            for date_str in parse_result.messages_by_date.keys():
+            for date_str in recent_dates:
                 old_hash = old_content_hashes.get(date_str, "")
                 new_hash = self.storage.get_original_content_hash(room_name, date_str)
                 old_count = old_message_counts.get(date_str, 0)
@@ -121,24 +137,25 @@ class FileUploadWorker(QThread):
 
                 if self.storage.invalidate_summary_if_content_changed(
                     room_name, date_str, old_hash, new_hash,
-                    old_count, new_count, threshold=50
+                    old_count, new_count
                 ):
                     invalidated_dates.append(date_str)
-            
-            # 7. 메시지 추출 및 DB 저장
-            self.progress.emit(60, "DB에 저장 중...")
+
+            # 7. 최근 날짜만 DB 저장 (과거 날짜는 파일만 저장됨)
+            self.progress.emit(60, f"DB에 저장 중... ({len(recent_dates)}일, {skipped_dates}일 건너뜀)")
             total_messages = 0
             new_messages = 0
-            
-            for date_str, lines in parse_result.messages_by_date.items():
+
+            for date_str in recent_dates:
+                lines = parse_result.messages_by_date[date_str]
                 msg_date = datetime.strptime(date_str, '%Y-%m-%d').date()
                 messages = []
-                
+
                 for line in lines:
                     parsed = MessageParser.parse_message(line, msg_date)
                     if parsed:
                         messages.append(parsed)
-                
+
                 if messages:
                     total_messages += len(messages)
                     try:
@@ -165,7 +182,7 @@ class FileUploadWorker(QThread):
             self.progress.emit(100, "완료!")
             
             # 결과 메시지 구성
-            result_msg = f"✅ {room_name}\n📁 {len(saved_files)}일 저장됨\n💬 총 {total_messages:,}개 메시지"
+            result_msg = f"✅ {room_name}\n📁 {len(saved_files)}일 저장됨 ({skipped_dates}일 보호)\n💬 최근 {total_messages:,}개 메시지 DB 반영"
             if invalidated_dates:
                 result_msg += f"\n🔄 {len(invalidated_dates)}일 요약 갱신 필요"
             
@@ -818,16 +835,18 @@ class SummaryGeneratorWorker(QThread):
                 self.finished.emit(False, "대화 데이터가 없습니다.")
                 return
             
-            # "pending" 타입: 요약 필요한 날짜만 (신규 + 갱신필요)
+            # "pending" 타입: 마지막 요약일(포함) 이후 날짜만
             if self.summary_type == "pending":
                 dates_needing_summary = self.storage.get_dates_needing_summary(self.room_name)
                 dates_to_process = list(dates_needing_summary.keys())
-                
+
                 if not dates_to_process:
                     self.finished.emit(True, "✅ 모든 날짜가 이미 요약되어 있습니다.")
                     return
 
-                self.progress.emit(15, f"🎯 신규 {len(dates_to_process)}일 요약 예정")
+                new_count = sum(1 for r in dates_needing_summary.values() if r == "new")
+                resummary_count = sum(1 for r in dates_needing_summary.values() if r == "resummary")
+                self.progress.emit(15, f"🎯 신규 {new_count}일 + 재요약 {resummary_count}일 예정")
                 skipped_count = len(messages_by_date) - len(dates_to_process)
             else:
                 # 날짜 범위 계산
@@ -1468,7 +1487,7 @@ class MainWindow(QMainWindow):
             QTextBrowser {
                 border: none;
                 background-color: transparent;
-                font-size: 13px;
+                font-size: 16px;
             }
         """)
         self.summary_browser.setPlaceholderText("채팅방을 선택하면 요약이 표시됩니다.")
@@ -1642,7 +1661,7 @@ class MainWindow(QMainWindow):
             QTextBrowser {
                 border: none;
                 background-color: transparent;
-                font-size: 14px;
+                font-size: 17px;
                 line-height: 1.6;
             }
         """)
@@ -1800,6 +1819,90 @@ class MainWindow(QMainWindow):
 
         etc_layout.addWidget(stats_card)
 
+        # 채팅방 백업 카드
+        backup_card = QFrame()
+        backup_card.setStyleSheet("""
+            QFrame {
+                background-color: #FFFFFF;
+                border: 1px solid #E8E8E8;
+                border-radius: 12px;
+            }
+        """)
+        backup_card_layout = QVBoxLayout(backup_card)
+        backup_card_layout.setContentsMargins(15, 12, 15, 12)
+
+        backup_title = QLabel("💾 채팅방 백업")
+        backup_title.setStyleSheet("border: none; font-size: 15px; font-weight: bold;")
+        backup_card_layout.addWidget(backup_title)
+
+        backup_desc = QLabel("선택된 채팅방의 원본 대화, 요약, URL 파일을 백업합니다.")
+        backup_desc.setStyleSheet("border: none; color: #666; font-size: 12px;")
+        backup_desc.setWordWrap(True)
+        backup_card_layout.addWidget(backup_desc)
+
+        backup_btn_layout = QHBoxLayout()
+        backup_btn_layout.addStretch()
+        self.etc_backup_room_btn = QPushButton("💾 백업")
+        self.etc_backup_room_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FB8C00;
+                color: white;
+                padding: 6px 18px;
+                border-radius: 6px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #EF6C00;
+            }
+        """)
+        self.etc_backup_room_btn.clicked.connect(self._on_room_backup)
+        backup_btn_layout.addWidget(self.etc_backup_room_btn)
+        backup_card_layout.addLayout(backup_btn_layout)
+
+        etc_layout.addWidget(backup_card)
+
+        # 채팅방 복원 카드
+        restore_card = QFrame()
+        restore_card.setStyleSheet("""
+            QFrame {
+                background-color: #FFFFFF;
+                border: 1px solid #E8E8E8;
+                border-radius: 12px;
+            }
+        """)
+        restore_card_layout = QVBoxLayout(restore_card)
+        restore_card_layout.setContentsMargins(15, 12, 15, 12)
+
+        restore_title = QLabel("📂 채팅방 복원")
+        restore_title.setStyleSheet("border: none; font-size: 15px; font-weight: bold;")
+        restore_card_layout.addWidget(restore_title)
+
+        restore_desc = QLabel("백업에서 특정 채팅방의 데이터를 복원합니다.")
+        restore_desc.setStyleSheet("border: none; color: #666; font-size: 12px;")
+        restore_desc.setWordWrap(True)
+        restore_card_layout.addWidget(restore_desc)
+
+        restore_btn_layout = QHBoxLayout()
+        restore_btn_layout.addStretch()
+        self.etc_restore_room_btn = QPushButton("📂 복원")
+        self.etc_restore_room_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #43A047;
+                color: white;
+                padding: 6px 18px;
+                border-radius: 6px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #2E7D32;
+            }
+        """)
+        self.etc_restore_room_btn.clicked.connect(self._on_restore_room_from_backup_with_current)
+        restore_btn_layout.addWidget(self.etc_restore_room_btn)
+        restore_card_layout.addLayout(restore_btn_layout)
+
+        etc_layout.addWidget(restore_card)
+
         etc_layout.addStretch()
 
         self.tab_widget.addTab(etc_tab, "🔧 기타")
@@ -1863,10 +1966,15 @@ class MainWindow(QMainWindow):
 
         tools_menu.addSeparator()
 
-        restore_action = QAction("📂 백업에서 복원...", self)
-        restore_action.setToolTip("백업 디렉터리에서 선택하여 복원")
+        restore_action = QAction("📂 전체 백업에서 복원...", self)
+        restore_action.setToolTip("백업 디렉터리에서 선택하여 전체 복원")
         restore_action.triggered.connect(self._on_restore_from_backup)
         tools_menu.addAction(restore_action)
+
+        room_restore_action = QAction("📂 채팅방 복원...", self)
+        room_restore_action.setToolTip("백업에서 특정 채팅방만 복원")
+        room_restore_action.triggered.connect(lambda: self._on_restore_room_from_backup())
+        tools_menu.addAction(room_restore_action)
 
         tools_menu.addSeparator()
 
@@ -2226,8 +2334,8 @@ class MainWindow(QMainWindow):
 
         # 요약 필요한 날짜 조회
         dates_needing_summary = storage.get_dates_needing_summary(room_name)
-        new_count = len(dates_needing_summary)
-        needs_update_count = 0
+        new_count = sum(1 for r in dates_needing_summary.values() if r == "new")
+        needs_update_count = sum(1 for r in dates_needing_summary.values() if r == "resummary")
 
         # 현재 LLM 설정 가져오기
         from full_config import config
@@ -2523,98 +2631,149 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_restore_from_backup(self):
-        """백업에서 복원."""
+        """전체 백업에서 복원."""
         backups = self.storage.get_backup_list()
-        
+
         if not backups:
             QMessageBox.information(
-                self, "백업에서 복원",
+                self, "전체 백업에서 복원",
                 "사용 가능한 백업이 없습니다.\n\n"
                 "먼저 '💾 전체 백업...' 또는 '💾 채팅방 백업...'을 실행하세요."
             )
             return
-        
+
         # 백업 선택 다이얼로그
         from PySide6.QtWidgets import QInputDialog
-        
+
         backup_items = [
             f"{b['name']} ({b['size_mb']} MB)" for b in backups
         ]
-        
+
         selected, ok = QInputDialog.getItem(
-            self, "백업에서 복원",
+            self, "전체 백업에서 복원",
             "복원할 백업을 선택하세요:",
             backup_items, 0, False
         )
-        
+
         if not ok:
             return
-        
+
         # 선택된 백업 찾기
         selected_idx = backup_items.index(selected)
         backup = backups[selected_idx]
         backup_path = backup['path']
-        
-        # 채팅방 목록 조회
-        rooms_in_backup = self.storage.get_rooms_in_backup(backup_path)
-        
-        # 복원 범위 선택
-        restore_options = ["전체 복원 (DB 포함)"] + [f"채팅방: {r}" for r in rooms_in_backup]
-        
-        selected_restore, ok = QInputDialog.getItem(
-            self, "복원 범위 선택",
-            f"백업: {backup['name']}\n\n복원 범위를 선택하세요:",
-            restore_options, 0, False
+
+        reply = QMessageBox.warning(
+            self, "전체 복원 확인",
+            "⚠️ 전체 복원은 현재 데이터를 덮어씁니다.\n\n"
+            "• 현재 DB가 백업 시점의 DB로 교체됩니다\n"
+            "• 모든 파일이 백업 시점으로 복원됩니다\n\n"
+            "계속하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
-        
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._update_status("전체 복원 중...", "working")
+        success = self.storage.restore_from_backup(backup_path)
+
+        if success:
+            self._update_status("전체 복원 완료 (재시작 권장)", "success")
+            QMessageBox.information(
+                self, "복원 완료",
+                "✅ 전체 복원이 완료되었습니다.\n\n"
+                "⚠️ DB가 변경되었으므로 앱을 재시작하세요."
+            )
+        else:
+            self._update_status("복원 실패", "error")
+            QMessageBox.warning(self, "복원 실패", "❌ 복원 중 오류가 발생했습니다.")
+
+    def _on_restore_room_from_backup_with_current(self):
+        """기타 탭에서 호출: 현재 선택된 채팅방을 기본값으로 복원."""
+        default_room = None
+        if self.current_room_id:
+            room = self.db.get_room_by_id(self.current_room_id)
+            if room:
+                default_room = room.name
+        self._on_restore_room_from_backup(default_room)
+
+    def _on_restore_room_from_backup(self, default_room=None):
+        """백업에서 특정 채팅방 복원.
+
+        Args:
+            default_room: 기본 선택할 채팅방 이름 (기타 탭에서 호출 시 현재 채팅방)
+        """
+        backups = self.storage.get_backup_list()
+
+        if not backups:
+            QMessageBox.information(
+                self, "채팅방 복원",
+                "사용 가능한 백업이 없습니다.\n\n"
+                "먼저 '💾 전체 백업...' 또는 '💾 채팅방 백업...'을 실행하세요."
+            )
+            return
+
+        from PySide6.QtWidgets import QInputDialog
+
+        # 백업 선택
+        backup_items = [
+            f"{b['name']} ({b['size_mb']} MB)" for b in backups
+        ]
+
+        selected, ok = QInputDialog.getItem(
+            self, "채팅방 복원",
+            "백업을 선택하세요:",
+            backup_items, 0, False
+        )
+
         if not ok:
             return
-        
-        # 복원 실행
-        if selected_restore == "전체 복원 (DB 포함)":
-            reply = QMessageBox.warning(
-                self, "전체 복원 확인",
-                "⚠️ 전체 복원은 현재 데이터를 덮어씁니다.\n\n"
-                "• 현재 DB가 백업 시점의 DB로 교체됩니다\n"
-                "• 모든 파일이 백업 시점으로 복원됩니다\n\n"
-                "계속하시겠습니까?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
+
+        selected_idx = backup_items.index(selected)
+        backup = backups[selected_idx]
+        backup_path = backup['path']
+
+        # 백업 내 채팅방 목록 조회
+        rooms_in_backup = self.storage.get_rooms_in_backup(backup_path)
+
+        if not rooms_in_backup:
+            QMessageBox.information(
+                self, "채팅방 복원",
+                "선택한 백업에 채팅방 데이터가 없습니다."
             )
-            
-            if reply != QMessageBox.StandardButton.Yes:
-                return
-            
-            self._update_status("전체 복원 중...", "working")
-            success = self.storage.restore_from_backup(backup_path)
-            
-            if success:
-                self._update_status("전체 복원 완료 (재시작 권장)", "success")
-                QMessageBox.information(
-                    self, "복원 완료",
-                    "✅ 전체 복원이 완료되었습니다.\n\n"
-                    "⚠️ DB가 변경되었으므로 앱을 재시작하세요."
-                )
-            else:
-                self._update_status("복원 실패", "error")
-                QMessageBox.warning(self, "복원 실패", "❌ 복원 중 오류가 발생했습니다.")
+            return
+
+        # 기본 선택 인덱스 결정
+        default_idx = 0
+        if default_room and default_room in rooms_in_backup:
+            default_idx = rooms_in_backup.index(default_room)
+
+        # 채팅방 선택
+        selected_room, ok = QInputDialog.getItem(
+            self, "채팅방 복원",
+            f"백업: {backup['name']}\n\n복원할 채팅방을 선택하세요:",
+            rooms_in_backup, default_idx, False
+        )
+
+        if not ok:
+            return
+
+        # 복원 실행
+        self._update_status(f"'{selected_room}' 복원 중...", "working")
+        success = self.storage.restore_from_backup(backup_path, selected_room)
+
+        if success:
+            self._update_status(f"'{selected_room}' 복원 완료", "success")
+            self._load_rooms()
+            QMessageBox.information(
+                self, "복원 완료",
+                f"✅ '{selected_room}' 채팅방이 복원되었습니다."
+            )
         else:
-            # 개별 채팅방 복원
-            room_name = selected_restore.replace("채팅방: ", "")
-            
-            self._update_status(f"'{room_name}' 복원 중...", "working")
-            success = self.storage.restore_from_backup(backup_path, room_name)
-            
-            if success:
-                self._update_status(f"'{room_name}' 복원 완료", "success")
-                self._load_rooms()
-                QMessageBox.information(
-                    self, "복원 완료",
-                    f"✅ '{room_name}' 채팅방이 복원되었습니다."
-                )
-            else:
-                self._update_status("복원 실패", "error")
-                QMessageBox.warning(self, "복원 실패", "❌ 복원 중 오류가 발생했습니다.")
+            self._update_status("복원 실패", "error")
+            QMessageBox.warning(self, "복원 실패", "❌ 복원 중 오류가 발생했습니다.")
     
     # ===== 날짜별 요약 탭 메서드 =====
     

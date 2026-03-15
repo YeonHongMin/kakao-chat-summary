@@ -101,15 +101,29 @@ class FileStorage:
         
         return filepath
     
-    def save_all_daily_originals(self, room_name: str, messages_by_date: Dict[str, List[str]]) -> List[Path]:
-        """모든 날짜의 원본 대화 저장."""
+    def save_all_daily_originals(self, room_name: str, messages_by_date: Dict[str, List[str]],
+                                   cutoff_date: str = None) -> List[Path]:
+        """모든 날짜의 원본 대화 저장.
+
+        Args:
+            room_name: 채팅방 이름
+            messages_by_date: 날짜별 메시지
+            cutoff_date: 이 날짜 미만은 건너뜀 (YYYY-MM-DD). None이면 전체 저장.
+        """
         saved_files = []
-        
+        skipped = 0
+
         for date_str in sorted(messages_by_date.keys()):
+            if cutoff_date and date_str < cutoff_date:
+                skipped += 1
+                continue
             messages = messages_by_date[date_str]
             filepath = self.save_daily_original(room_name, date_str, messages)
             saved_files.append(filepath)
-        
+
+        if skipped > 0:
+            print(f"ℹ️  {skipped}일 과거 날짜 원본 파일 보호 (< {cutoff_date})")
+
         return saved_files
     
     def load_daily_original(self, room_name: str, date_str: str) -> List[str]:
@@ -288,20 +302,32 @@ class FileStorage:
         """
         요약이 필요한 날짜 목록 반환.
 
-        요약 파일이 없는 날짜만 "new"로 반환.
-        메시지가 추가된 경우는 업로드 시 invalidate_summary_if_updated()에서
-        요약 파일을 삭제하므로, 여기서는 존재 여부만 확인하면 됨.
+        마지막 요약일(포함)부터 이후 날짜 중 요약이 없는 날짜를 반환.
+        마지막 요약일은 중간 데이터가 추가될 수 있으므로 재요약 대상에 포함.
+        요약이 전혀 없으면 모든 날짜를 반환.
 
         Returns:
             Dict[date_str, reason]: 날짜별 요약 필요 사유
             - "new": 새로운 날짜 (요약 없음)
+            - "resummary": 마지막 요약일 (재요약 대상)
         """
         result = {}
         original_dates = self.get_available_dates(room_name)
-        summarized_dates = set(self.get_summarized_dates(room_name))
+        summarized_dates = sorted(self.get_summarized_dates(room_name))
 
-        for date_str in original_dates:
-            if date_str not in summarized_dates:
+        if summarized_dates:
+            last_summarized = summarized_dates[-1]
+            summarized_set = set(summarized_dates)
+
+            for date_str in original_dates:
+                if date_str == last_summarized:
+                    result[date_str] = "resummary"
+                elif date_str > last_summarized:
+                    if date_str not in summarized_set:
+                        result[date_str] = "new"
+        else:
+            # 요약이 전혀 없으면 모든 날짜
+            for date_str in original_dates:
                 result[date_str] = "new"
 
         return result
@@ -309,15 +335,14 @@ class FileStorage:
     def invalidate_summary_if_content_changed(self, room_name: str, date_str: str,
                                                old_hash: str, new_hash: str,
                                                old_count: int = 0, new_count: int = 0,
-                                               threshold: int = 50) -> bool:
+                                               threshold: int = 10) -> bool:
         """
-        메시지 내용이 크게 변경된 경우에만 기존 요약 무효화.
+        메시지가 크게 변경된 경우에만 기존 요약 무효화.
 
-        헤더(저장 시각 등)가 아닌 실제 메시지 내용만 비교하고,
-        메시지 개수 차이가 임계값 이상일 때만 요약을 무효화합니다.
+        호출자(FileUploadWorker)가 마지막 요약일-1일 이후 날짜만 전달하므로,
+        이 메서드는 cutoff 판단 없이 임계값만 체크합니다.
 
-        사용자 나가기/들어오기 등 작은 변경(시스템 메시지 1-2개)은 무시하고,
-        실제 대화가 많이 추가된 경우(50개 이상)에만 재수집합니다.
+        무효화 조건: 메시지 10개 이상 추가 시에만 무효화
 
         Args:
             room_name: 채팅방 이름
@@ -326,7 +351,7 @@ class FileStorage:
             new_hash: 저장 후 메시지 내용 해시
             old_count: 저장 전 메시지 개수
             new_count: 저장 후 메시지 개수
-            threshold: 메시지 개수 변경 임계값 (기본 50개)
+            threshold: 메시지 개수 변경 임계값 (기본 10개)
 
         Returns:
             True if summary was invalidated
@@ -342,21 +367,21 @@ class FileStorage:
         # 메시지 개수 차이 계산
         diff = new_count - old_count if old_count > 0 else new_count
 
-        # 1. 증가가 임계값 미만 → 작은 변경 (사용자 나가기, 시스템 메시지 등) → 무시
+        # 증가가 임계값 미만 → 작은 변경 → 무시
         if 0 <= diff < threshold:
             if diff > 0:
                 print(f"ℹ️  [{date_str}] 메시지 +{diff}개 (< {threshold}개) → 요약 유지")
             return False
 
-        # 2. 증가가 임계값 이상 → 대량 추가 → 무효화
+        # 증가가 임계값 이상 → 무효화
         if diff >= threshold and self.has_summary(room_name, date_str):
             self.delete_daily_summary(room_name, date_str)
-            print(f"🔄 [{date_str}] 메시지 +{diff}개 (≥ {threshold}개, 대량 추가) → 요약 무효화")
+            print(f"🔄 [{date_str}] 메시지 +{diff}개 (≥ {threshold}개) → 요약 무효화")
             return True
 
-        # 3. 감소 → 파일 손상/부분 업로드 → 경고만 출력, 요약 유지
+        # 감소 → 경고만, 요약 유지
         if diff < 0:
-            print(f"⚠️  [{date_str}] 메시지 {diff}개 (데이터 감소) → 요약 유지 (새 파일 무시됨)")
+            print(f"⚠️  [{date_str}] 메시지 {diff}개 (데이터 감소) → 요약 유지")
             return False
 
         return False

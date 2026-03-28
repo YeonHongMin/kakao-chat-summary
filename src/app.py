@@ -39,7 +39,7 @@ def main():
     
     # 앱 정보 설정
     app.setApplicationName("카카오톡 대화 분석기")
-    app.setApplicationVersion("2.0.0")
+    app.setApplicationVersion("2.7.0")
     app.setOrganizationName("KakaoTalk Chat Summary")
     
     # 기본 폰트 설정 (한글 지원)

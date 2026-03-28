@@ -56,6 +56,7 @@
   - 📅 일정 및 공지
 - **스마트 요약 생성**: 새 날짜 또는 업데이트된 날짜만 요약
 - **LLM 응답 완결성 검증**: 불완전한 응답 저장 방지
+- **전체 채팅방 일괄 요약**: 모든 채팅방을 한 번에 요약 생성 (v2.7.0)
 
 ### 2.6 URL 추출 (URL Extraction)
 - 요약 결과에서 공유된 링크 자동 추출
@@ -63,6 +64,7 @@
 - URL 정규화 및 중복 제거 (백틱, 따옴표 등 특수문자 정리)
 - 3개 섹션으로 분류 (최근 3일, 최근 1주, 전체)
 - DB + 파일 이중 저장 (동기화/복구 가능)
+- **전체 채팅방 일괄 URL 동기화**: 모든 채팅방의 URL을 한 번에 수집 (v2.7.0)
 
 ### 2.7 데이터 복구 (도구 메뉴)
 - **파일 기반 백업**: original/, summary/ 디렉터리에 일별 Markdown 저장
@@ -109,8 +111,8 @@ data/
 | 로깅 | logging (logs/ 디렉터리에 날짜별 상세 기록) |
 | 스레드 안전 | 워커별 독립 DB 인스턴스 (v2.4.0) |
 
-### 4.2 스레드 안전성 (v2.4.0)
-- **백그라운드 워커**(`FileUploadWorker`, `SyncWorker`, `SummaryGeneratorWorker`)는 각각 독립적인 `Database()` 인스턴스를 생성하여 사용
+### 4.2 스레드 안전성 (v2.4.0+)
+- **백그라운드 워커**(`FileUploadWorker`, `SyncWorker`, `SummaryGeneratorWorker`, `AllRoomsSummaryWorker`, `AllRoomsUrlSyncWorker`)는 각각 독립적인 `Database()` 인스턴스를 생성하여 사용
 - 싱글톤 `get_db()` 공유로 인한 SQLite 동시 접근 충돌 방지
 - 작업 완료 후 `engine.dispose()`로 명시적 연결 해제
 

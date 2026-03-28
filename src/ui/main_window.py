@@ -392,6 +392,222 @@ class DashboardCard(QFrame):
             self.sub_label.setText(subtext)
 
 
+class AllRoomsSummaryOptionsDialog(QDialog):
+    """전체 채팅방 요약 옵션 다이얼로그."""
+
+    def __init__(self, parent=None, room_stats: list = None, current_llm: str = "glm"):
+        super().__init__(parent)
+        self.setWindowTitle("🌐 전체 채팅방 LLM 요약 생성")
+        self.setMinimumWidth(520)
+        self.summary_type = "pending"
+        self.skip_existing = True
+        self.selected_llm = current_llm
+        room_stats = room_stats or []
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        # 전체 채팅방 현황
+        total_rooms = len(room_stats)
+        total_pending = sum(s.get('pending', 0) for s in room_stats)
+        total_days = sum(s.get('total', 0) for s in room_stats)
+        total_done = sum(s.get('done', 0) for s in room_stats)
+
+        status_label = QLabel(
+            f"🏠 채팅방 {total_rooms}개 | 📅 총 {total_days}일 | "
+            f"✅ 완료 {total_done}일 | 🔄 요약필요 {total_pending}일"
+        )
+        status_label.setStyleSheet("""
+            font-size: 11px; color: #666;
+            padding: 10px; background-color: #F8F8F8;
+            border-radius: 6px;
+        """)
+        layout.addWidget(status_label)
+
+        # 채팅방별 현황 리스트
+        if room_stats:
+            detail_group = QGroupBox("📋 채팅방별 현황")
+            detail_layout = QVBoxLayout(detail_group)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setMaximumHeight(150)
+            scroll_content = QWidget()
+            scroll_layout = QVBoxLayout(scroll_content)
+            scroll_layout.setSpacing(2)
+
+            for stat in room_stats:
+                pending = stat.get('pending', 0)
+                icon = "🔴" if pending > 0 else "🟢"
+                lbl = QLabel(
+                    f"{icon} {stat['name']}: "
+                    f"{stat.get('done', 0)}/{stat.get('total', 0)}일 완료"
+                    + (f" (🔄 {pending}일 필요)" if pending > 0 else "")
+                )
+                lbl.setStyleSheet("font-size: 11px; padding: 2px 4px;")
+                scroll_layout.addWidget(lbl)
+
+            scroll_layout.addStretch()
+            scroll.setWidget(scroll_content)
+            detail_layout.addWidget(scroll)
+            layout.addWidget(detail_group)
+
+        # LLM 선택
+        llm_group = QGroupBox("🤖 LLM 선택")
+        llm_layout = QHBoxLayout(llm_group)
+
+        self.llm_combo = QComboBox()
+        self.llm_combo.setStyleSheet("""
+            QComboBox {
+                padding: 8px 12px; font-size: 13px;
+                border: 2px solid #E0E0E0; border-radius: 6px;
+            }
+            QComboBox:focus { border-color: #FEE500; }
+        """)
+
+        from full_config import LLM_PROVIDERS, config
+        llm_items = [
+            ("glm", "🇨🇳 Z.AI GLM-4.7 (기본)"),
+            ("chatgpt", "🇺🇸 OpenAI GPT-4o-mini"),
+            ("minimax", "🇨🇳 MiniMax M2.1"),
+            ("perplexity", "🇺🇸 Perplexity Sonar"),
+        ]
+        current_idx = 0
+        for idx, (key, label) in enumerate(llm_items):
+            self.llm_combo.addItem(label, key)
+            if key == current_llm:
+                current_idx = idx
+        self.llm_combo.setCurrentIndex(current_idx)
+        llm_layout.addWidget(self.llm_combo, 1)
+
+        self.api_status = QLabel()
+        self.api_status.setStyleSheet("font-size: 11px;")
+        self._update_api_status()
+        llm_layout.addWidget(self.api_status)
+        self.llm_combo.currentIndexChanged.connect(self._update_api_status)
+        layout.addWidget(llm_group)
+
+        # 요약 범위 선택
+        type_group = QGroupBox("📅 요약 범위 선택")
+        type_layout = QVBoxLayout(type_group)
+
+        self.type_group = QButtonGroup(self)
+
+        self.radio_pending = QRadioButton(
+            f"🎯 요약 필요한 날짜만 ({total_pending}일)"
+        )
+        self.radio_pending.setChecked(True)
+        self.radio_pending.setStyleSheet("font-weight: bold; color: #1976D2;")
+
+        self.radio_today = QRadioButton("📅 오늘 (Today)")
+        self.radio_yesterday = QRadioButton("📅 어제~오늘 (Yesterday)")
+        self.radio_2days = QRadioButton("📅 엇그제~오늘 (2 Days)")
+        self.radio_all = QRadioButton(f"📅 전체 일자 (All - {total_days}일)")
+
+        self.type_group.addButton(self.radio_pending, 0)
+        self.type_group.addButton(self.radio_today, 1)
+        self.type_group.addButton(self.radio_yesterday, 2)
+        self.type_group.addButton(self.radio_2days, 3)
+        self.type_group.addButton(self.radio_all, 4)
+
+        type_layout.addWidget(self.radio_pending)
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setStyleSheet("color: #E0E0E0;")
+        type_layout.addWidget(separator)
+        type_layout.addWidget(self.radio_today)
+        type_layout.addWidget(self.radio_yesterday)
+        type_layout.addWidget(self.radio_2days)
+        type_layout.addWidget(self.radio_all)
+        layout.addWidget(type_group)
+
+        # 옵션
+        option_group = QGroupBox("⚙️ 옵션")
+        option_layout = QVBoxLayout(option_group)
+        self.skip_checkbox = QCheckBox("✅ 이미 요약된 날짜 건너뛰기")
+        self.skip_checkbox.setChecked(True)
+        self.skip_checkbox.setStyleSheet("font-size: 12px;")
+        self.skip_checkbox.setToolTip("'요약 필요한 날짜만' 선택 시에는 자동 적용됩니다.")
+        option_layout.addWidget(self.skip_checkbox)
+        self.radio_pending.toggled.connect(
+            lambda checked: self.skip_checkbox.setEnabled(not checked)
+        )
+        layout.addWidget(option_group)
+
+        # 경고
+        warning = QLabel(
+            "⚠️ 전체 채팅방 요약은 시간이 오래 걸릴 수 있습니다.\n"
+            "진행 중 취소할 수 있으며, 완료된 요약은 보존됩니다."
+        )
+        warning.setStyleSheet("""
+            font-size: 11px; color: #E65100;
+            padding: 8px; background-color: #FFF3E0;
+            border-radius: 6px; border: 1px solid #FFE0B2;
+        """)
+        layout.addWidget(warning)
+
+        # 버튼
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        cancel_btn = QPushButton("취소")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+
+        generate_btn = QPushButton("🌐 전체 채팅방 요약 시작")
+        generate_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1976D2; color: white;
+                padding: 10px 20px; border-radius: 6px;
+                font-size: 13px; font-weight: bold;
+            }
+            QPushButton:hover { background-color: #1565C0; }
+        """)
+        generate_btn.clicked.connect(self._on_generate)
+        button_layout.addWidget(generate_btn)
+        layout.addLayout(button_layout)
+
+    def _update_api_status(self):
+        """API 키 상태 업데이트."""
+        from full_config import config
+        llm_key = self.llm_combo.currentData()
+        api_key = config.get_api_key(llm_key)
+        if api_key:
+            self.api_status.setText("✅ API 키 설정됨")
+            self.api_status.setStyleSheet("font-size: 11px; color: #4CAF50;")
+        else:
+            self.api_status.setText("⚠️ API 키 필요")
+            self.api_status.setStyleSheet("font-size: 11px; color: #FF9800;")
+
+    def _on_generate(self):
+        """생성 버튼 클릭."""
+        self.selected_llm = self.llm_combo.currentData()
+        from full_config import config
+        if not config.get_api_key(self.selected_llm):
+            QMessageBox.warning(
+                self, "API 키 필요",
+                f"선택한 LLM ({self.llm_combo.currentText()})의 API 키가 "
+                f"설정되어 있지 않습니다.\n\n환경변수를 설정하거나 .env 파일에 추가해주세요."
+            )
+            return
+
+        selected = self.type_group.checkedId()
+        if selected == 0:
+            self.summary_type = "pending"
+            self.skip_existing = True
+        elif selected == 1:
+            self.summary_type = "today"
+        elif selected == 2:
+            self.summary_type = "yesterday"
+        elif selected == 3:
+            self.summary_type = "2days"
+        else:
+            self.summary_type = "all"
+
+        if selected != 0:
+            self.skip_existing = self.skip_checkbox.isChecked()
+
+        self.accept()
+
+
 class SummaryOptionsDialog(QDialog):
     """요약 옵션 다이얼로그."""
     
@@ -968,6 +1184,340 @@ class SummaryGeneratorWorker(QThread):
             self.finished.emit(False, f"오류: {str(e)}")
 
 
+class AllRoomsSummaryWorker(QThread):
+    """전체 채팅방 LLM 요약 생성 워커."""
+    progress = Signal(int, str)  # (progress_percent, message)
+    finished = Signal(bool, str)  # (success, result_or_error)
+
+    def __init__(self, summary_type: str = "pending", skip_existing: bool = True,
+                 llm_provider: str = "glm"):
+        super().__init__()
+        self.summary_type = summary_type
+        self.skip_existing = skip_existing
+        self.llm_provider = llm_provider
+        self.storage = get_storage()
+        self._cancelled = False
+
+    def cancel(self):
+        """취소 요청."""
+        self._cancelled = True
+
+    def is_cancelled(self) -> bool:
+        """취소 여부 확인."""
+        return self._cancelled
+
+    def run(self):
+        try:
+            from pathlib import Path
+            import sys
+            sys.path.insert(0, str(Path(__file__).parent.parent))
+
+            from chat_processor import ChatProcessor
+            from full_config import config
+            from datetime import datetime, timedelta
+            from db.database import Database
+
+            # LLM 제공자 설정
+            config.set_provider(self.llm_provider)
+            llm_provider_info = config.get_provider_info()
+            llm_provider_name = llm_provider_info.name
+
+            self.progress.emit(5, "전체 채팅방 스캔 중...")
+
+            # 워커 전용 DB 인스턴스
+            worker_db = Database()
+
+            # DB에서 모든 채팅방 가져오기
+            all_rooms = worker_db.get_all_rooms()
+            if not all_rooms:
+                worker_db.engine.dispose()
+                self.finished.emit(False, "등록된 채팅방이 없습니다.")
+                return
+
+            processor = ChatProcessor()
+            total_rooms = len(all_rooms)
+            total_success = 0
+            total_fail = 0
+            total_skipped_rooms = 0
+            room_results = []  # 채팅방별 결과 요약
+
+            for room_idx, room in enumerate(all_rooms):
+                if self._cancelled:
+                    break
+
+                room_name = room.name
+                room_id = room.id
+                room_progress_base = int((room_idx / total_rooms) * 90) + 5
+
+                self.progress.emit(
+                    room_progress_base,
+                    f"[{room_idx+1}/{total_rooms}] {room_name} 처리 중..."
+                )
+
+                # 채팅방별 원본 데이터 로드
+                messages_by_date = self.storage.load_all_originals(room_name)
+                if not messages_by_date:
+                    room_results.append(f"⏭️ {room_name}: 데이터 없음")
+                    total_skipped_rooms += 1
+                    continue
+
+                # 날짜 범위 결정 (기존 SummaryGeneratorWorker와 동일 로직)
+                if self.summary_type == "pending":
+                    dates_needing = self.storage.get_dates_needing_summary(room_name)
+                    dates_to_process = list(dates_needing.keys())
+                elif self.summary_type == "all":
+                    all_dates = list(messages_by_date.keys())
+                    if self.skip_existing:
+                        summarized = set(self.storage.get_summarized_dates(room_name))
+                        dates_to_process = [d for d in all_dates if d not in summarized]
+                    else:
+                        dates_to_process = all_dates
+                else:
+                    # today, yesterday, 2days
+                    today = datetime.now().strftime("%Y-%m-%d")
+                    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+                    day_before = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+
+                    if self.summary_type == "today":
+                        start_date = today
+                    elif self.summary_type == "yesterday":
+                        start_date = yesterday
+                    elif self.summary_type == "2days":
+                        start_date = day_before
+                    else:
+                        start_date = None
+
+                    if start_date:
+                        target_dates = [d for d in messages_by_date.keys() if d >= start_date]
+                    else:
+                        target_dates = list(messages_by_date.keys())
+
+                    if self.skip_existing:
+                        summarized = set(self.storage.get_summarized_dates(room_name))
+                        dates_to_process = [d for d in target_dates if d not in summarized]
+                    else:
+                        dates_to_process = target_dates
+
+                if not dates_to_process:
+                    room_results.append(f"⏭️ {room_name}: 요약 필요 없음")
+                    total_skipped_rooms += 1
+                    continue
+
+                # 날짜별 요약 생성
+                room_success = 0
+                room_fail = 0
+
+                for date_idx, date_str in enumerate(sorted(dates_to_process)):
+                    if self._cancelled:
+                        break
+
+                    # 전체 진행률 계산
+                    room_date_progress = room_progress_base + int(
+                        ((date_idx + 1) / len(dates_to_process)) *
+                        (90 / total_rooms)
+                    )
+                    self.progress.emit(
+                        min(room_date_progress, 95),
+                        f"[{room_idx+1}/{total_rooms}] {room_name} - {date_str} ({date_idx+1}/{len(dates_to_process)})"
+                    )
+
+                    messages = messages_by_date.get(date_str, [])
+                    if not messages:
+                        room_fail += 1
+                        continue
+
+                    chat_content = "\n".join(messages)
+                    summary = processor.process_summary(chat_content)
+
+                    if "[ERROR]" not in summary:
+                        # 파일 저장
+                        self.storage.save_daily_summary(
+                            room_name, date_str, summary, llm_provider_name
+                        )
+                        # DB 저장
+                        try:
+                            summary_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                            worker_db.delete_summary(room_id, summary_date)
+                            worker_db.add_summary(
+                                room_id, summary_date, "daily",
+                                summary, llm_provider_name
+                            )
+                        except Exception:
+                            pass  # 파일 저장 성공이면 DB 실패는 무시
+                        room_success += 1
+                    else:
+                        room_fail += 1
+
+                total_success += room_success
+                total_fail += room_fail
+                room_results.append(
+                    f"{'✅' if room_fail == 0 else '⚠️'} {room_name}: "
+                    f"{room_success}일 완료" +
+                    (f", {room_fail}일 실패" if room_fail > 0 else "")
+                )
+
+            worker_db.engine.dispose()
+
+            self.progress.emit(100, "전체 완료!")
+
+            # 결과 메시지 구성
+            if self._cancelled:
+                status = f"⚠️ 취소됨 | 완료: {total_success}일"
+            else:
+                status = f"✅ 전체 완료: {total_success}일 요약"
+
+            if total_fail > 0:
+                status += f" | ❌ {total_fail}일 실패"
+            if total_skipped_rooms > 0:
+                status += f" | ⏭️ {total_skipped_rooms}개 채팅방 건너뜀"
+
+            detail = "\n".join(room_results)
+            result_msg = f"{status}\n\n--- 채팅방별 결과 ---\n{detail}"
+            self.finished.emit(True, result_msg)
+
+        except Exception as e:
+            self.finished.emit(False, f"오류: {str(e)}")
+
+
+class AllRoomsUrlSyncWorker(QThread):
+    """전체 채팅방 URL 동기화 워커."""
+    progress = Signal(int, str)
+    finished = Signal(bool, str)
+
+    def __init__(self):
+        super().__init__()
+        self.storage = get_storage()
+        self._cancelled = False
+
+    def cancel(self):
+        """취소 요청."""
+        self._cancelled = True
+
+    def run(self):
+        try:
+            from pathlib import Path
+            import sys
+            sys.path.insert(0, str(Path(__file__).parent.parent))
+
+            from db.database import Database
+            from url_extractor import extract_urls_from_text, deduplicate_urls
+            from datetime import date, timedelta
+
+            self.progress.emit(5, "전체 채팅방 URL 스캔 중...")
+
+            worker_db = Database()
+            all_rooms = worker_db.get_all_rooms()
+
+            if not all_rooms:
+                worker_db.engine.dispose()
+                self.finished.emit(False, "등록된 채팅방이 없습니다.")
+                return
+
+            total_rooms = len(all_rooms)
+            total_urls = 0
+            room_results = []
+
+            today = date.today()
+            three_days_ago = today - timedelta(days=3)
+            one_week_ago = today - timedelta(days=7)
+
+            for room_idx, room in enumerate(all_rooms):
+                if self._cancelled:
+                    break
+
+                room_name = room.name
+                room_id = room.id
+                progress_pct = int((room_idx / total_rooms) * 90) + 5
+
+                self.progress.emit(
+                    progress_pct,
+                    f"[{room_idx+1}/{total_rooms}] {room_name} URL 수집 중..."
+                )
+
+                # 요약 날짜 목록 로드
+                summary_dates = self.storage.get_summarized_dates(room_name)
+                if not summary_dates:
+                    room_results.append(f"⏭️ {room_name}: 요약 없음")
+                    continue
+
+                # 날짜별 URL 추출
+                urls_by_date = {}
+                for date_str in sorted(summary_dates):
+                    summary = self.storage.load_daily_summary(room_name, date_str)
+                    if summary:
+                        urls = extract_urls_from_text(summary)
+                        if urls:
+                            urls_by_date[date_str] = urls
+
+                if not urls_by_date:
+                    room_results.append(f"⏭️ {room_name}: URL 없음")
+                    continue
+
+                # 기간별 URL 분류
+                def extract_for_period(start_d):
+                    period_urls = {}
+                    for ds, urls in urls_by_date.items():
+                        try:
+                            d = date.fromisoformat(ds)
+                            if d >= start_d:
+                                for url, descs in urls.items():
+                                    if url not in period_urls:
+                                        period_urls[url] = []
+                                    for desc in descs:
+                                        if desc and desc not in period_urls[url]:
+                                            period_urls[url].append(desc)
+                        except Exception:
+                            pass
+                    return period_urls
+
+                urls_recent = deduplicate_urls(extract_for_period(three_days_ago))
+                urls_weekly = deduplicate_urls(extract_for_period(one_week_ago))
+                urls_all = {}
+                for ds, urls in urls_by_date.items():
+                    for url, descs in urls.items():
+                        if url not in urls_all:
+                            urls_all[url] = []
+                        for desc in descs:
+                            if desc and desc not in urls_all[url]:
+                                urls_all[url].append(desc)
+                urls_all = deduplicate_urls(urls_all)
+
+                if urls_all:
+                    # DB 저장
+                    try:
+                        worker_db.clear_urls_by_room(room_id)
+                        worker_db.add_urls_batch(room_id, urls_all)
+                    except Exception:
+                        pass
+
+                    # 파일 저장
+                    self.storage.save_url_lists(
+                        room_name, urls_recent, urls_weekly, urls_all
+                    )
+
+                    total_urls += len(urls_all)
+                    room_results.append(
+                        f"✅ {room_name}: {len(urls_all)}개 URL"
+                    )
+                else:
+                    room_results.append(f"⏭️ {room_name}: URL 없음")
+
+            worker_db.engine.dispose()
+            self.progress.emit(100, "전체 완료!")
+
+            if self._cancelled:
+                status = f"⚠️ 취소됨 | 수집: {total_urls}개 URL"
+            else:
+                status = f"✅ 전체 완료: {total_urls}개 URL 수집"
+
+            detail = "\n".join(room_results)
+            result_msg = f"{status}\n\n--- 채팅방별 결과 ---\n{detail}"
+            self.finished.emit(True, result_msg)
+
+        except Exception as e:
+            self.finished.emit(False, f"오류: {str(e)}")
+
+
 class RecoveryWorker(QThread):
     """DB 복구 워커 - 파일 저장소에서 DB 복구."""
     progress = Signal(int, str)
@@ -1296,6 +1846,8 @@ class MainWindow(QMainWindow):
         self.upload_worker: Optional[FileUploadWorker] = None
         self.sync_worker: Optional[SyncWorker] = None
         self.summary_worker: Optional[SummaryGeneratorWorker] = None
+        self.all_rooms_summary_worker: Optional[AllRoomsSummaryWorker] = None
+        self.all_rooms_url_worker: Optional[AllRoomsUrlSyncWorker] = None
         self.recovery_worker: Optional[RecoveryWorker] = None
         self.progress_dialog: Optional[SummaryProgressDialog] = None
         self.summary_progress_widget: Optional[SummaryProgressWidget] = None
@@ -1949,7 +2501,19 @@ class MainWindow(QMainWindow):
         summary_action.setShortcut("Ctrl+G")
         summary_action.triggered.connect(self._on_generate_summary)
         tools_menu.addAction(summary_action)
-        
+
+        all_rooms_summary_action = QAction("🌐 전체 채팅방 LLM 요약 생성", self)
+        all_rooms_summary_action.setShortcut("Ctrl+Shift+G")
+        all_rooms_summary_action.setToolTip("등록된 모든 채팅방에 대해 일괄 LLM 요약 생성")
+        all_rooms_summary_action.triggered.connect(self._on_generate_all_rooms_summary)
+        tools_menu.addAction(all_rooms_summary_action)
+
+        all_rooms_url_action = QAction("🌐 전체 채팅방 URL 동기화", self)
+        all_rooms_url_action.setShortcut("Ctrl+Shift+U")
+        all_rooms_url_action.setToolTip("등록된 모든 채팅방의 요약에서 URL을 추출하여 DB/파일에 저장")
+        all_rooms_url_action.triggered.connect(self._on_sync_all_rooms_urls)
+        tools_menu.addAction(all_rooms_url_action)
+
         tools_menu.addSeparator()
 
         # === 백업/복원 (스냅샷 관리) ===
@@ -2428,6 +2992,199 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "요약 실패", result)
 
         self.summary_source_room_id = None
+
+    @Slot()
+    def _on_generate_all_rooms_summary(self):
+        """전체 채팅방 LLM 요약 생성."""
+        if self._summary_in_progress:
+            QMessageBox.warning(
+                self, "알림",
+                "이미 요약이 진행 중입니다.\n완료 후 다시 시도하세요."
+            )
+            return
+
+        # 모든 채팅방의 통계 수집
+        from file_storage import get_storage
+        storage = get_storage()
+        rooms = self.db.get_all_rooms()
+
+        if not rooms:
+            QMessageBox.warning(self, "알림", "등록된 채팅방이 없습니다.")
+            return
+
+        room_stats = []
+        for room in rooms:
+            available = storage.get_available_dates(room.name)
+            summarized = storage.get_summarized_dates(room.name)
+            dates_needing = storage.get_dates_needing_summary(room.name)
+            room_stats.append({
+                'name': room.name,
+                'total': len(available),
+                'done': len(summarized),
+                'pending': len(dates_needing),
+            })
+
+        # 현재 LLM 설정
+        from full_config import config
+        current_llm = config.current_provider
+
+        # 옵션 다이얼로그
+        dialog = AllRoomsSummaryOptionsDialog(
+            self, room_stats=room_stats, current_llm=current_llm
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        summary_type = dialog.summary_type
+        skip_existing = dialog.skip_existing
+        selected_llm = dialog.selected_llm
+        llm_display_name = dialog.llm_combo.currentText()
+
+        # 상태 플래그
+        self._summary_in_progress = True
+        self.summary_source_room_id = None  # 전체 채팅방이므로 None
+        self.generate_btn.setEnabled(False)
+
+        # 상태바 프로그레스 위젯
+        self.summary_progress_widget = SummaryProgressWidget(
+            self, llm_name=llm_display_name, room_name="전체 채팅방"
+        )
+        self.statusbar.insertPermanentWidget(0, self.summary_progress_widget)
+        self.summary_progress_widget.show()
+
+        self._update_status(f"⏳ {llm_display_name} 전체 채팅방 요약 생성 중...", "working")
+
+        # 워커 시작
+        self.all_rooms_summary_worker = AllRoomsSummaryWorker(
+            summary_type=summary_type,
+            skip_existing=skip_existing,
+            llm_provider=selected_llm
+        )
+
+        self.all_rooms_summary_worker.progress.connect(
+            self.summary_progress_widget.update_progress
+        )
+        self.all_rooms_summary_worker.progress.connect(
+            lambda p, m: self._update_status(m, "working")
+        )
+        self.all_rooms_summary_worker.finished.connect(
+            self._on_all_rooms_summary_finished
+        )
+        self.summary_progress_widget.cancel_requested.connect(
+            self.all_rooms_summary_worker.cancel
+        )
+
+        self.all_rooms_summary_worker.start()
+
+    @Slot(bool, str)
+    def _on_all_rooms_summary_finished(self, success: bool, result: str):
+        """전체 채팅방 요약 완료."""
+        self.generate_btn.setEnabled(True)
+        self._summary_in_progress = False
+
+        # 프로그레스 위젯 제거
+        if self.summary_progress_widget:
+            self.statusbar.removeWidget(self.summary_progress_widget)
+            self.summary_progress_widget.deleteLater()
+            self.summary_progress_widget = None
+
+        if success:
+            self._update_status("전체 채팅방 요약 완료", "success")
+
+            # 현재 보고 있는 채팅방 대시보드 갱신
+            if self.current_room_id:
+                self._on_room_selected(
+                    self.current_room_id, self.current_room_file or ""
+                )
+
+            # 결과 표시
+            QMessageBox.information(
+                self, "전체 채팅방 요약 완료",
+                result
+            )
+        else:
+            self._update_status("전체 채팅방 요약 실패", "error")
+            QMessageBox.warning(self, "요약 실패", result)
+
+    @Slot()
+    def _on_sync_all_rooms_urls(self):
+        """전체 채팅방 URL 동기화."""
+        if self._summary_in_progress:
+            QMessageBox.warning(
+                self, "알림",
+                "요약이 진행 중입니다.\n완료 후 다시 시도하세요."
+            )
+            return
+
+        rooms = self.db.get_all_rooms()
+        if not rooms:
+            QMessageBox.warning(self, "알림", "등록된 채팅방이 없습니다.")
+            return
+
+        # 확인 다이얼로그
+        room_list = "\n".join(f"  • {r.name}" for r in rooms)
+        reply = QMessageBox.question(
+            self, "전체 채팅방 URL 동기화",
+            f"다음 {len(rooms)}개 채팅방의 요약에서 URL을 추출합니다:\n\n"
+            f"{room_list}\n\n계속하시겠습니까?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self._summary_in_progress = True
+        self.generate_btn.setEnabled(False)
+
+        # 상태바 프로그레스
+        self.summary_progress_widget = SummaryProgressWidget(
+            self, llm_name="URL", room_name="전체 채팅방"
+        )
+        self.statusbar.insertPermanentWidget(0, self.summary_progress_widget)
+        self.summary_progress_widget.show()
+
+        self._update_status("⏳ 전체 채팅방 URL 동기화 중...", "working")
+
+        self.all_rooms_url_worker = AllRoomsUrlSyncWorker()
+        self.all_rooms_url_worker.progress.connect(
+            self.summary_progress_widget.update_progress
+        )
+        self.all_rooms_url_worker.progress.connect(
+            lambda p, m: self._update_status(m, "working")
+        )
+        self.all_rooms_url_worker.finished.connect(
+            self._on_all_rooms_url_sync_finished
+        )
+        self.summary_progress_widget.cancel_requested.connect(
+            self.all_rooms_url_worker.cancel
+        )
+        self.all_rooms_url_worker.start()
+
+    @Slot(bool, str)
+    def _on_all_rooms_url_sync_finished(self, success: bool, result: str):
+        """전체 채팅방 URL 동기화 완료."""
+        self.generate_btn.setEnabled(True)
+        self._summary_in_progress = False
+
+        if self.summary_progress_widget:
+            self.statusbar.removeWidget(self.summary_progress_widget)
+            self.summary_progress_widget.deleteLater()
+            self.summary_progress_widget = None
+
+        if success:
+            self._update_status("전체 채팅방 URL 동기화 완료", "success")
+
+            # 현재 채팅방의 URL 탭 갱신
+            if self.current_room_id:
+                self._refresh_url_list()
+
+            QMessageBox.information(
+                self, "전체 채팅방 URL 동기화 완료", result
+            )
+        else:
+            self._update_status("전체 채팅방 URL 동기화 실패", "error")
+            QMessageBox.warning(self, "요약 실패", result)
+
     
     @Slot()
     def _on_recovery(self):
@@ -3277,7 +4034,14 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """앱 종료 시 진행 중인 요약 처리."""
-        if self._summary_in_progress and self.summary_worker:
+        active_worker = None
+        if self._summary_in_progress:
+            if self.summary_worker and self.summary_worker.isRunning():
+                active_worker = self.summary_worker
+            elif self.all_rooms_summary_worker and self.all_rooms_summary_worker.isRunning():
+                active_worker = self.all_rooms_summary_worker
+
+        if active_worker:
             reply = QMessageBox.question(
                 self, "종료 확인",
                 "요약이 진행 중입니다. 취소하고 종료하시겠습니까?",
@@ -3287,8 +4051,8 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.Yes:
                 event.ignore()
                 return
-            self.summary_worker.cancel()
-            self.summary_worker.wait(5000)
+            active_worker.cancel()
+            active_worker.wait(5000)
         event.accept()
 
     @Slot()

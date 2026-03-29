@@ -1,24 +1,20 @@
-# Broken git / Conflict files
-.git_broken/
-*_Conflict*
-
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
+*.pyo
 *.egg-info/
 dist/
 build/
 
-# Virtual Environment
-venv/
-.venv/
-env/
+# Environment
+.env.local
+.env
 
-# Claude/Cursor local
-.claude/
+# Data (사용자 데이터)
+data/
+output/
+logs/
+upload/
 
 # IDE
 .vscode/
@@ -29,54 +25,10 @@ env/
 # OS
 .DS_Store
 Thumbs.db
-nul
 
-# Environment variables (keep example)
-.env
-.env.local
-!env.local.example
-
-# Data directory - keep folder structure, ignore contents
-data/*
-!data/.gitkeep
-!data/db/
-!data/original/
-!data/summary/
-!data/url/
-!data/backup/
-data/db/*
-data/original/*
-data/summary/*
-data/url/*
-data/backup/*
-!data/db/.gitkeep
-!data/original/.gitkeep
-!data/summary/.gitkeep
-!data/url/.gitkeep
-
-# Logs
-logs/
-*.log
-
-# Upload directory - keep folder, ignore contents
-upload/*
-!upload/.gitkeep
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-*.pytest_cache
-
-# Temp files
-*.tmp
+# Backup
 *.bak
-*.temp
 
-# SQLite
-*.db
-*.db-journal
-*.db-wal
-*.db-shm
-*.sqlite
-*.sqlite3
+# Gemini / AI agents
+.gemini/
+.claude/

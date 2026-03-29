@@ -36,11 +36,13 @@ class FileStorage:
         self.original_dir = base_dir / "original"
         self.summary_dir = base_dir / "summary"
         self.url_dir = base_dir / "url"
-        
+        self.detail_dir = base_dir / "detail_summary"
+
         # 디렉토리 생성
         self.original_dir.mkdir(parents=True, exist_ok=True)
         self.summary_dir.mkdir(parents=True, exist_ok=True)
         self.url_dir.mkdir(parents=True, exist_ok=True)
+        self.detail_dir.mkdir(parents=True, exist_ok=True)
     
     # ==================== Original (원본 대화) ====================
     
@@ -221,6 +223,42 @@ class FileStorage:
         filepath = room_dir / filename
         return filepath.exists()
     
+    # ==================== Detail Summary (상세 분석) ====================
+
+    def save_detail_summary(self, room_name: str, date_str: str,
+                            html_content: str, llm_provider: str = "Unknown") -> Path:
+        """상세 분석 HTML 저장."""
+        room_dir = self.detail_dir / self._sanitize_name(room_name)
+        room_dir.mkdir(parents=True, exist_ok=True)
+
+        date_compact = date_str.replace("-", "")
+        filename = f"{self._sanitize_name(room_name)}_{date_compact}_detail.html"
+        filepath = room_dir / filename
+        filepath.write_text(html_content, encoding='utf-8')
+        return filepath
+
+    def load_detail_summary(self, room_name: str, date_str: str) -> Optional[str]:
+        """상세 분석 HTML 로드."""
+        filepath = self._get_detail_path(room_name, date_str)
+        if filepath.exists():
+            return filepath.read_text(encoding='utf-8')
+        return None
+
+    def has_detail_summary(self, room_name: str, date_str: str) -> bool:
+        """상세 분석 존재 여부."""
+        return self._get_detail_path(room_name, date_str).exists()
+
+    def get_detail_summary_path(self, room_name: str, date_str: str) -> Path:
+        """상세 분석 파일 경로."""
+        return self._get_detail_path(room_name, date_str)
+
+    def _get_detail_path(self, room_name: str, date_str: str) -> Path:
+        """상세 분석 파일 경로 반환."""
+        room_dir = self.detail_dir / self._sanitize_name(room_name)
+        date_compact = date_str.replace("-", "")
+        filename = f"{self._sanitize_name(room_name)}_{date_compact}_detail.html"
+        return room_dir / filename
+
     def delete_daily_summary(self, room_name: str, date_str: str) -> bool:
         """해당 날짜의 요약 삭제."""
         room_dir = self.summary_dir / self._sanitize_name(room_name)
@@ -705,7 +743,11 @@ class FileStorage:
             # 4. url 디렉터리 백업
             if self.url_dir.exists():
                 shutil.copytree(self.url_dir, backup_dir / "url")
-            
+
+            # 5. detail_summary 디렉터리 백업
+            if self.detail_dir.exists() and any(self.detail_dir.iterdir()):
+                shutil.copytree(self.detail_dir, backup_dir / "detail_summary")
+
             print(f"✅ 백업 완료: {backup_dir}")
             return backup_dir
             
@@ -782,7 +824,12 @@ class FileStorage:
             url_room = self.url_dir / sanitized
             if url_room.exists():
                 shutil.copytree(url_room, backup_dir / "url" / sanitized)
-            
+
+            # detail_summary 디렉터리 백업
+            detail_room = self.detail_dir / sanitized
+            if detail_room.exists():
+                shutil.copytree(detail_room, backup_dir / "detail_summary" / sanitized)
+
             print(f"✅ 채팅방 백업 완료: {backup_dir}")
             return backup_dir
             
@@ -827,29 +874,36 @@ class FileStorage:
         """
         import shutil
         
+        # 백업 디렉터리명 → 속성 매핑
+        _dir_map = {
+            'original': self.original_dir,
+            'summary': self.summary_dir,
+            'url': self.url_dir,
+            'detail_summary': self.detail_dir,
+        }
+
         try:
             if room_name:
                 # 개별 채팅방 복원
                 sanitized = self._sanitize_name(room_name)
-                
-                for subdir in ['original', 'summary', 'url']:
+
+                for subdir, base_dir in _dir_map.items():
                     src = backup_path / subdir / sanitized
                     if src.exists():
-                        dst = getattr(self, f"{subdir}_dir") / sanitized
+                        dst = base_dir / sanitized
                         if dst.exists():
                             shutil.rmtree(dst)
                         shutil.copytree(src, dst)
-                
+
                 print(f"✅ 채팅방 복원 완료: {room_name}")
             else:
                 # 전체 복원
-                for subdir in ['original', 'summary', 'url']:
+                for subdir, base_dir in _dir_map.items():
                     src = backup_path / subdir
                     if src.exists():
-                        dst = getattr(self, f"{subdir}_dir")
-                        if dst.exists():
-                            shutil.rmtree(dst)
-                        shutil.copytree(src, dst)
+                        if base_dir.exists():
+                            shutil.rmtree(base_dir)
+                        shutil.copytree(src, base_dir)
                 
                 # DB 복원
                 db_src = backup_path / "db" / "chat_history.db"

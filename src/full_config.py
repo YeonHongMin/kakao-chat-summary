@@ -46,7 +46,7 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
     "glm": LLMProvider(
         name="Z.AI GLM",
         api_url="https://api.z.ai/api/coding/paas/v4/chat/completions",
-        model="glm-4.7",
+        model="glm-5-turbo",
         env_key="ZAI_API_KEY"
     ),
     "chatgpt": LLMProvider(
@@ -58,7 +58,7 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
     "minimax": LLMProvider(
         name="MiniMax Coding Plan",
         api_url="https://api.minimax.io/v1/chat/completions",
-        model="MiniMax-M2.1",
+        model="MiniMax-M2.5",
         env_key="MINIMAX_API_KEY"
     ),
     "perplexity": LLMProvider(

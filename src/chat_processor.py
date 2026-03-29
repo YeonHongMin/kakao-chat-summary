@@ -59,4 +59,17 @@ class ChatProcessor:
         요약 결과를 Markdown 형식으로 포맷팅합니다.
         file_storage._format_summary_content()에서 헤더/푸터를 추가하므로 여기서는 본문만 정리.
         """
+        content = self._strip_reasoning(content)
         return content.strip()
+
+    @staticmethod
+    def _strip_reasoning(content: str) -> str:
+        """LLM 추론(thinking) 내용 제거."""
+        import re
+        # <think>...</think> 블록 제거
+        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+        # 마크다운 요약 시작점(### ) 이전의 추론 텍스트 제거
+        match = re.search(r'(###\s)', content)
+        if match and match.start() > 50:
+            content = content[match.start():]
+        return content

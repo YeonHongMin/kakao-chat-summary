@@ -3373,6 +3373,10 @@ class MainWindow(QMainWindow):
             else:
                 self._update_status(f"✅ [{summary_room_name}] 요약 완료", "success")
 
+            # URL 자동 동기화
+            if summary_room_name and self.summary_source_room_id:
+                self._auto_sync_urls(self.summary_source_room_id, summary_room_name)
+
             # 상세 분석 자동 실행 (체크 시)
             if getattr(self, '_detail_after_summary', False) and summary_room_name:
                 self._start_detail_batch(
@@ -4684,6 +4688,62 @@ class MainWindow(QMainWindow):
             self._update_status(f"❌ {result}", "error")
 
         self.summary_source_room_id = None
+
+    def _auto_sync_urls(self, room_id: int, room_name: str):
+        """요약 완료 후 자동 URL 동기화."""
+        try:
+            from file_storage import get_storage
+            storage = get_storage()
+
+            today = date.today()
+            three_days_ago = today - timedelta(days=3)
+            one_week_ago = today - timedelta(days=7)
+
+            urls_by_date = {}
+            summary_dates = storage.get_summarized_dates(room_name)
+
+            for date_str in sorted(summary_dates):
+                summary = storage.load_daily_summary(room_name, date_str)
+                if summary:
+                    urls = extract_urls_from_text(summary)
+                    if urls:
+                        urls_by_date[date_str] = urls
+
+            def extract_urls_for_period(start_date):
+                period_urls = {}
+                for ds, urls in urls_by_date.items():
+                    try:
+                        d = date.fromisoformat(ds)
+                        if d >= start_date:
+                            for url, descs in urls.items():
+                                if url not in period_urls:
+                                    period_urls[url] = []
+                                for desc in descs:
+                                    if desc and desc not in period_urls[url]:
+                                        period_urls[url].append(desc)
+                    except Exception:
+                        pass
+                return period_urls
+
+            urls_recent = deduplicate_urls(extract_urls_for_period(three_days_ago))
+            urls_weekly = deduplicate_urls(extract_urls_for_period(one_week_ago))
+            urls_all = {}
+            for ds, urls in urls_by_date.items():
+                for url, descs in urls.items():
+                    if url not in urls_all:
+                        urls_all[url] = []
+                    for desc in descs:
+                        if desc and desc not in urls_all[url]:
+                            urls_all[url].append(desc)
+            urls_all = deduplicate_urls(urls_all)
+
+            if urls_all:
+                self.db.clear_urls_by_room(room_id)
+                self.db.add_urls_batch(room_id, urls_all)
+                storage.save_url_lists(room_name, urls_recent, urls_weekly, urls_all)
+                logger.info(f"[URL 자동 동기화] {room_name}: {len(urls_all)}개 URL 저장")
+        except Exception as e:
+            logger.warning(f"[URL 자동 동기화] {room_name} 실패: {e}")
 
     # ===== URL 정보 탭 메서드 =====
     

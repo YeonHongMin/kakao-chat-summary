@@ -274,6 +274,19 @@ class FileStorage:
             print(f"📦 [Backup] 요약 파일 백업됨: {backup_path.name}")
             return True
         return False
+
+    def delete_detail_summary(self, room_name: str, date_str: str) -> bool:
+        """해당 날짜의 상세 분석 삭제."""
+        filepath = self._get_detail_path(room_name, date_str)
+        
+        if filepath.exists():
+            # [Safety] 삭제 대신 백업으로 변경
+            backup_path = filepath.with_suffix('.html.bak')
+            import shutil
+            shutil.move(str(filepath), str(backup_path))
+            print(f"📦 [Backup] 상세 분석 파일 백업됨: {backup_path.name}")
+            return True
+        return False
     
     def get_original_message_count(self, room_name: str, date_str: str) -> int:
         """특정 날짜의 원본 메시지 수 반환."""
@@ -412,8 +425,11 @@ class FileStorage:
             return False
 
         # 증가가 임계값 이상 → 무효화
-        if diff >= threshold and self.has_summary(room_name, date_str):
-            self.delete_daily_summary(room_name, date_str)
+        if diff >= threshold and (self.has_summary(room_name, date_str) or self.has_detail_summary(room_name, date_str)):
+            if self.has_summary(room_name, date_str):
+                self.delete_daily_summary(room_name, date_str)
+            if self.has_detail_summary(room_name, date_str):
+                self.delete_detail_summary(room_name, date_str)
             print(f"🔄 [{date_str}] 메시지 +{diff}개 (≥ {threshold}개) → 요약 무효화")
             return True
 
@@ -443,8 +459,11 @@ class FileStorage:
     def invalidate_summary_if_file_changed(self, room_name: str, date_str: str,
                                             old_size: int, new_size: int) -> bool:
         """[Deprecated] 메시지 해시 기반인 invalidate_summary_if_content_changed() 사용 권장."""
-        if old_size != new_size and self.has_summary(room_name, date_str):
-            self.delete_daily_summary(room_name, date_str)
+        if old_size != new_size and (self.has_summary(room_name, date_str) or self.has_detail_summary(room_name, date_str)):
+            if self.has_summary(room_name, date_str):
+                self.delete_daily_summary(room_name, date_str)
+            if self.has_detail_summary(room_name, date_str):
+                self.delete_detail_summary(room_name, date_str)
             return True
         return False
     
@@ -452,8 +471,11 @@ class FileStorage:
     def invalidate_summary_if_updated(self, room_name: str, date_str: str, 
                                        old_count: int, new_count: int) -> bool:
         """[Deprecated] 파일 크기 기반인 invalidate_summary_if_file_changed() 사용 권장."""
-        if new_count > old_count and self.has_summary(room_name, date_str):
-            self.delete_daily_summary(room_name, date_str)
+        if new_count > old_count and (self.has_summary(room_name, date_str) or self.has_detail_summary(room_name, date_str)):
+            if self.has_summary(room_name, date_str):
+                self.delete_daily_summary(room_name, date_str)
+            if self.has_detail_summary(room_name, date_str):
+                self.delete_detail_summary(room_name, date_str)
             return True
         return False
     

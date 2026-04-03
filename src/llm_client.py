@@ -87,6 +87,7 @@ class LLMClient:
             "max_tokens": 16000,
             "temperature": 0.5,
             "messages": [
+                {"role": "system", "content": "You are a native South Korean AI assistant. You MUST write your response ONLY in pure Korean (Hangul) and English. You are STRICTLY FORBIDDEN from outputting any Chinese characters (Hanzi/漢字/中文, e.g., 們, 推荐, 暂), Japanese characters (Hiragana/Katakana/Kanji, e.g., なし, が), or Arabic. Translate everything into natural Korean. If there is no data, say '없음'."},
                 {"role": "user", "content": config.PROMPT_TEMPLATE.format(text=text)}
             ]
         }

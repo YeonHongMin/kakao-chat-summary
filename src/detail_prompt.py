@@ -95,6 +95,11 @@ DETAIL_PROMPT_TEMPLATE = """다음은 카카오톡 오픈채팅방 '{room_name}'
 {text}
 ---
 
+[최종 검토 규칙] - 매우 중요
+절대로 한자(예: 推荐, 们, 中, 无)나 일본어(예: の間, が)를 출력하지 마세요. 모든 단어는 반드시 한글(한국어)로 번역해서 출력하세요. 
+예: "도구 推荐" -> "도구 추천", "내용中" -> "내용 중", "の間에서" -> "사이에서".
+출력 결과에 한자나 일본어가 단 하나라도 있으면 시스템 에러가 발생합니다! 오직 한글과 영어만 사용하세요.
+
 아래에 <h1>부터 바로 시작하세요. 사고 과정이나 설명 없이 HTML만 출력:"""
 
 
@@ -263,7 +268,10 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
         "model": provider_info.model,
         "max_tokens": 16000,
         "temperature": 0.5,
-        "messages": [{"role": "user", "content": prompt}]
+        "messages": [
+            {"role": "system", "content": "You are a native South Korean AI assistant. You MUST write your response ONLY in pure Korean (Hangul) and English. You are STRICTLY FORBIDDEN from outputting any Chinese characters (Hanzi/漢字/中文, e.g., 們, 推荐, 暂), Japanese characters (Hiragana/Katakana/Kanji, e.g., なし, が), or Arabic. Translate everything into natural Korean. If there is no data, say '없음'."},
+            {"role": "user", "content": prompt}
+        ]
     }
 
     max_retries = 3

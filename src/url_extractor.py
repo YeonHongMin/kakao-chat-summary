@@ -156,45 +156,73 @@ def extract_url_with_description(line: str) -> Tuple[str, str]:
 def extract_urls_from_text(text: str, section_only: bool = False) -> Dict[str, List[str]]:
     """
     텍스트에서 URL과 설명을 추출합니다.
-    
+
+    새 포맷(멀티라인)과 기존 포맷(한 줄) 모두 지원:
+
+    새 포맷:
+        - https://example.com
+          제목 (@공유자)
+          **내용** — 설명
+          **시사점** — 설명
+          **활용** — 설명
+
+    기존 포맷:
+        - [닉네임] 설명: https://example.com
+
     Args:
         text: 분석할 전체 텍스트 (Markdown 형식)
         section_only: True면 "링크/URL" 섹션에서만 추출, False면 전체 텍스트에서 추출
-        
+
     Returns:
         {URL: [설명 목록]} 딕셔너리
         같은 URL이 여러 번 등장하면 설명들이 리스트에 추가됨
     """
     url_descriptions = defaultdict(list)
-    in_url_section = not section_only  # section_only가 False면 처음부터 추출
-    
+    in_url_section = not section_only
+    current_url = None  # 멀티라인 파싱용
+
     for line in text.split('\n'):
-        line = line.strip()
-        
+        stripped = line.strip()
+
         if section_only:
-            # URL 섹션 시작 감지 (다양한 헤더 형식 지원)
-            if '### 링크' in line or '### URL' in line or '2. 공유된 중요 링크' in line or '🔗' in line:
+            if '### 링크' in stripped or '### URL' in stripped or '2. 공유된 중요 링크' in stripped or '🔗' in stripped:
                 in_url_section = True
                 continue
-            
-            # 다른 섹션 시작 감지 (URL 섹션 종료)
-            if in_url_section and (line.startswith('### ') or line.startswith('## ') or (len(line) > 2 and line[:2].isdigit() and line[2] == '.')):
-                if not line.startswith('-') and not line.startswith('http'):
+            if in_url_section and (stripped.startswith('### ') or stripped.startswith('## ') or (len(stripped) > 2 and stripped[:2].isdigit() and stripped[2] == '.')):
+                if not stripped.startswith('-') and not stripped.startswith('http'):
                     in_url_section = False
+                    current_url = None
                     continue
-        
-        # URL 추출
-        if in_url_section:
-            url, description = extract_url_with_description(line)
-            if url:
-                # 중복 설명 방지: 같은 설명은 추가하지 않음
-                if description and description not in url_descriptions[url]:
-                    url_descriptions[url].append(description)
-                elif not description and url not in url_descriptions:
-                    # 설명 없는 URL도 등록 (빈 리스트)
-                    if not url_descriptions[url]:
-                        url_descriptions[url] = []
-    
+
+        if not in_url_section:
+            continue
+
+        # URL이 있는 줄 감지
+        url, description = extract_url_with_description(stripped)
+        if url:
+            current_url = url
+            if description and description not in url_descriptions[url]:
+                url_descriptions[url].append(description)
+            elif url not in url_descriptions:
+                url_descriptions[url] = []
+            continue
+
+        # URL이 없는 줄 — 현재 URL의 후속 설명줄 (멀티라인 포맷)
+        if current_url and stripped:
+            # 새 리스트 항목(- )이면 URL이 아닌 일반 항목 → 무시하고 current_url 리셋
+            if stripped.startswith('- '):
+                current_url = None
+                continue
+            # **내용**, **시사점**, **활용** 또는 제목줄
+            desc_line = stripped
+            # 마크다운 bold 제거: **내용** — xxx → 내용 — xxx
+            desc_line = re.sub(r'\*\*(.+?)\*\*', r'\1', desc_line)
+            if desc_line and desc_line not in url_descriptions[current_url]:
+                url_descriptions[current_url].append(desc_line)
+        elif not stripped:
+            # 빈 줄이면 현재 URL 블록 종료
+            current_url = None
+
     return dict(url_descriptions)
 
 

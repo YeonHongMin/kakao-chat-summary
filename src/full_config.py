@@ -46,7 +46,7 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
     "glm": LLMProvider(
         name="Z.AI GLM",
         api_url="https://api.z.ai/api/coding/paas/v4/chat/completions",
-        model="glm-5-turbo",
+        model="glm-4.5",
         env_key="ZAI_API_KEY"
     ),
     "chatgpt": LLMProvider(
@@ -58,7 +58,7 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
     "minimax": LLMProvider(
         name="MiniMax Coding Plan",
         api_url="https://api.minimax.io/v1/chat/completions",
-        model="MiniMax-M2.5",
+        model="MiniMax-M2.7",
         env_key="MINIMAX_API_KEY"
     ),
     "perplexity": LLMProvider(
@@ -94,8 +94,15 @@ class Config:
 - 추천받은 라이브러리, 유용한 단축키, 명령어, 팁 등
 
 ### 🔗 링크/URL
-- [발언자] 공유된 중요 링크 설명: https://...
-(이 섹션 헤더는 정확히 '### 링크/URL'로 작성하고, 각 링크는 '- '로 알기 쉽게 나열해주세요. URL 추출 스크립트가 인식해야 합니다.)
+(이 섹션 헤더는 정확히 '### 🔗 링크/URL'로 작성하세요. 대화에서 공유된 모든 URL을 빠짐없이 아래 형식으로 정리하세요.)
+
+- URL
+  제목 또는 설명 (@공유자)
+  **내용** — 어떤 내용인지 구체적으로 요약
+  **시사점** — 대화에서 이 링크가 논의된 맥락과 의미
+  **활용** — 이 링크를 어떻게 참고하거나 활용하면 좋을지
+
+(위 형식을 URL 개수만큼 반복. URL이 없으면 "공유된 URL 없음"으로 표기)
 
 ### 📅 일정 및 공지
 일정, 모임, 주요 공지사항

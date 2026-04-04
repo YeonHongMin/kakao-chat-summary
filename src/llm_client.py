@@ -6,8 +6,10 @@ llm_client.py - 통합 LLM API 클라이언트 모듈
 """
 
 from typing import Dict, Any, Optional
+import re
 import time
 import requests
+import hanja
 from full_config import config, LLM_PROVIDERS
 
 # ChatGPT Rate Limit: 3 RPM (분당 3 요청)
@@ -167,12 +169,16 @@ class LLMClient:
                     self.logger.error("Response truncated due to max_tokens limit")
                     return {"success": False, "error": f"Response truncated (finish_reason: {finish_reason})"}
             
+            # 한자 → 한글 독음 변환, 일본어 제거
+            content = hanja.translate(content, 'substitution')
+            content = re.sub(r'[\u3040-\u309f\u30a0-\u30ff]+', '', content)
+
             # 응답 완전성 검증
             validation_result = self._validate_response_content(content)
             if not validation_result["valid"]:
                 self.logger.error(f"Response validation failed: {validation_result['reason']}")
                 return {"success": False, "error": validation_result["reason"]}
-            
+
             return {
                 "success": True,
                 "content": content,

@@ -6,12 +6,14 @@ detail_prompt.py - 상세 분석 요약 프롬프트 및 HTML 템플릿
 다크 테마 CSS 템플릿으로 래핑하여 저장합니다.
 """
 
+import re
 import time
 import json
 import logging
 from datetime import datetime
 from typing import Dict, Any
 
+import hanja
 import requests
 
 logger = logging.getLogger("KakaoSummarizer")
@@ -53,12 +55,6 @@ DETAIL_PROMPT_TEMPLATE = """다음은 카카오톡 오픈채팅방 '{room_name}'
 
 --- 토픽 반복 끝 ---
 
-<h2>🔗 공유된 URL 모음</h2>
-<ul>
-<li><a href="실제URL">실제URL</a> — <strong>제목/설명</strong>: 어떤 내용인지 1줄 요약 (@공유자)</li>
-<li><a href="실제URL">실제URL</a> — <strong>제목/설명</strong>: 어떤 내용인지 1줄 요약 (@공유자)</li>
-</ul>
-
 <h2>📊 오늘의 감정/온도 분석</h2>
 <ul>
 <li>🔴 <strong>과열 신호:</strong> 토픽명 (시간대) — 과열 이유</li>
@@ -74,6 +70,19 @@ DETAIL_PROMPT_TEMPLATE = """다음은 카카오톡 오픈채팅방 '{room_name}'
 <li><strong>시사점 제목:</strong> 상세 설명</li>
 </ol>
 
+<h2>🔗 공유된 URL 모음</h2>
+<!-- 아래 url-card 구조를 URL 개수만큼 반복 -->
+<div class="url-card">
+<p><a href="실제URL">실제URL</a></p>
+<h3>제목 또는 사이트/리포지토리명 (@공유자)</h3>
+<ul class="url-details">
+<li><strong>내용</strong> · 어떤 내용인지 구체적으로 요약</li>
+<li><strong>시사점</strong> · 대화에서 이 링크가 논의된 맥락, 의미, 참여자들의 반응</li>
+<li><strong>활용</strong> · 이 링크를 어떻게 참고하거나 활용하면 좋을지 방안</li>
+</ul>
+</div>
+<!-- 반복 끝 -->
+
 ## 작성 규칙
 - HTML 태그만 사용 (<h1>, <h2>, <p>, <ul>, <ol>, <li>, <blockquote>, <strong>, <a> 등)
 - **URL 처리 (최우선 규칙 — 반드시 준수)**:
@@ -83,7 +92,7 @@ DETAIL_PROMPT_TEMPLATE = """다음은 카카오톡 오픈채팅방 '{room_name}'
   - 단순 도메인 URL(예: https://www.minimax.io/)도 반드시 포함
   - 각 토픽의 근거 항목에 관련 URL이 있으면 <a href="URL">🔗</a>로 포함
   - "🔗 공유된 URL 모음" 섹션에 대화의 **모든 URL을 빠짐없이** 모아 정리
-  - 각 URL에 대해: 무엇에 관한 링크인지 설명, 누가 공유했는지 (@닉네임) 표기
+  - 각 URL은 <div class="url-card"> 구조를 사용하여 '내용', '시사점', '활용' 방안을 구체적으로 작성하고 공유자(@닉네임) 표기
   - 토픽과 관련 없는 URL이라도 "🔗 공유된 URL 모음"에는 반드시 포함
   - URL이 없는 대화라면 이 섹션을 생략
 - 발언자를 @닉네임 형태로 인용
@@ -145,6 +154,24 @@ DETAIL_HTML_TEMPLATE = """<!DOCTYPE html>
     ol {{ margin: 0.5rem 0 0.5rem 1.3rem; }}
     li {{ margin: 0.45rem 0; color: #c9d1d9; line-height: 1.65; }}
     li p {{ margin: 0; }}
+    .url-card {{
+      background: rgba(31, 111, 235, 0.05);
+      border: 1px solid rgba(88, 166, 255, 0.2);
+      border-radius: 6px;
+      padding: 1.2rem;
+      margin-bottom: 1rem;
+    }}
+    .url-card p {{ margin: 0 0 0.4rem 0; }}
+    .url-card p a {{ font-size: 0.9rem; color: #79c0ff; word-break: break-all; border-bottom: none; }}
+    .url-card p a:hover {{ border-bottom: 1px solid #79c0ff; }}
+    .url-card h3 {{
+      font-size: 1.05rem; color: #f0f6fc; margin: 0.2rem 0 0.8rem 0;
+    }}
+    .url-card .url-details {{ margin: 0; padding: 0; list-style-type: none; }}
+    .url-card .url-details li {{
+      margin-bottom: 0.3rem; line-height: 1.5; font-size: 0.95rem; color: #c9d1d9;
+    }}
+    .url-card .url-details li strong {{ color: #8b949e; font-weight: 600; margin-right: 0.2rem; }}
     blockquote {{
       border-left: 3px solid #6e40c9;
       padding: 0.45rem 0.9rem; margin: 0.8rem 0;
@@ -206,7 +233,6 @@ def wrap_detail_html(content: str, room_name: str, date_str: str,
 
 def strip_reasoning(content: str) -> str:
     """LLM 추론(thinking) 내용 제거."""
-    import re
     # <think>...</think> 블록 제거
     content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
     # HTML 출력 시작점(<h1>) 이전의 추론 텍스트 제거
@@ -214,6 +240,15 @@ def strip_reasoning(content: str) -> str:
     if match and match.start() > 50:
         content = content[match.start():]
     return content.strip()
+
+
+def clean_foreign_chars(content: str) -> str:
+    """한자 → 한글 독음 변환, 일본어(히라가나/가타카나) 제거."""
+    # 1) 한자(CJK) → 한글 독음 변환
+    content = hanja.translate(content, 'substitution')
+    # 2) 일본어 히라가나(\u3040-\u309f), 가타카나(\u30a0-\u30ff) 제거
+    content = re.sub(r'[\u3040-\u309f\u30a0-\u30ff]+', '', content)
+    return content
 
 
 def validate_detail_response(content: str) -> Dict[str, Any]:
@@ -303,8 +338,9 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                 choice = data["choices"][0]
                 content = choice["message"]["content"]
 
-                # 추론 내용 제거
+                # 추론 내용 제거 + 한자/일본어 후처리
                 content = strip_reasoning(content)
+                content = clean_foreign_chars(content)
 
                 # finish_reason 체크
                 finish_reason = choice.get("finish_reason", "unknown")

@@ -597,11 +597,9 @@ class FileStorage:
 
 """
         for i, (url, descriptions) in enumerate(sorted_urls, 1):
-            desc_text = " / ".join(descriptions) if descriptions else ""
-            if desc_text:
-                content += f"{i}. {url}\n   - 💬 {desc_text}\n"
-            else:
-                content += f"{i}. {url}\n"
+            content += f"{i}. {url}\n"
+            for desc in descriptions:
+                content += f"   - 💬 {desc}\n"
         
         filepath.write_text(content, encoding='utf-8')
     
@@ -686,10 +684,8 @@ class FileStorage:
             elif '💬' in line and current_url:
                 desc_start = line.find('💬') + 2
                 desc = line[desc_start:].strip()
-                if desc:
-                    for d in desc.split(' / '):
-                        if d and d not in urls[current_url]:
-                            urls[current_url].append(d)
+                if desc and desc not in urls[current_url]:
+                    urls[current_url].append(desc)
         
         return urls
     

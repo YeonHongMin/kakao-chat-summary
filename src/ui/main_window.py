@@ -465,14 +465,13 @@ class AllRoomsSummaryOptionsDialog(QDialog):
         """)
 
         from full_config import LLM_PROVIDERS, config
-        llm_items = [
-            ("glm", "🇨🇳 Z.AI GLM-5-Turbo (기본)"),
-            ("chatgpt", "🇺🇸 OpenAI GPT-4o-mini"),
-            ("minimax", "🇨🇳 MiniMax M2.5"),
-            ("perplexity", "🇺🇸 Perplexity Sonar"),
-        ]
+        llm_flags = {"glm": "🇨🇳", "chatgpt": "🇺🇸", "minimax": "🇨🇳", "perplexity": "🇺🇸"}
+        default_key = config.DEFAULT_PROVIDER
         current_idx = 0
-        for idx, (key, label) in enumerate(llm_items):
+        for idx, (key, prov) in enumerate(LLM_PROVIDERS.items()):
+            suffix = " (기본)" if key == default_key else ""
+            flag = llm_flags.get(key, "🌐")
+            label = f"{flag} {prov.name} {prov.model}{suffix}"
             self.llm_combo.addItem(label, key)
             if key == current_llm:
                 current_idx = idx
@@ -656,15 +655,13 @@ class SummaryOptionsDialog(QDialog):
         
         # LLM 목록 추가
         from full_config import LLM_PROVIDERS, config
-        llm_items = [
-            ("glm", "🇨🇳 Z.AI GLM-5-Turbo (기본)"),
-            ("chatgpt", "🇺🇸 OpenAI GPT-4o-mini"),
-            ("minimax", "🇨🇳 MiniMax M2.5"),
-            ("perplexity", "🇺🇸 Perplexity Sonar"),
-        ]
-        
+        llm_flags = {"glm": "🇨🇳", "chatgpt": "🇺🇸", "minimax": "🇨🇳", "perplexity": "🇺🇸"}
+        default_key = config.DEFAULT_PROVIDER
         current_idx = 0
-        for idx, (key, label) in enumerate(llm_items):
+        for idx, (key, prov) in enumerate(LLM_PROVIDERS.items()):
+            suffix = " (기본)" if key == default_key else ""
+            flag = llm_flags.get(key, "🌐")
+            label = f"{flag} {prov.name} {prov.model}{suffix}"
             self.llm_combo.addItem(label, key)
             if key == current_llm:
                 current_idx = idx
@@ -4789,16 +4786,24 @@ class MainWindow(QMainWindow):
                 </h3>
             """
             for i, (url, descriptions) in enumerate(display_urls, 1):
-                desc_text = " / ".join(descriptions) if descriptions else "설명 없음"
+                desc_html = ""
+                if descriptions:
+                    for desc in descriptions:
+                        # 내용/시사점/활용 키워드를 볼드 처리
+                        if desc.startswith(('내용 —', '시사점 —', '활용 —', '내용—', '시사점—', '활용—')):
+                            key, _, val = desc.partition('—')
+                            desc_html += f'<div style="color: #555; font-size: 11px; margin-left: 30px;"><b>{key.strip()}</b> — {val.strip()}</div>'
+                        else:
+                            desc_html += f'<div style="color: #444; font-size: 12px; margin-left: 30px; margin-top: 3px;">{desc}</div>'
+                else:
+                    desc_html = '<div style="color: #999; font-size: 11px; margin-left: 30px;">설명 없음</div>'
                 html += f"""
-                <div style="margin-bottom: 10px; padding: 10px; background-color: #F9F9F9; border-radius: 8px; border-left: 3px solid {color};">
+                <div style="margin-bottom: 12px; padding: 10px; background-color: #F9F9F9; border-radius: 8px; border-left: 3px solid {color};">
                     <span style="color: #999; font-size: 11px; margin-right: 8px;">&nbsp;&nbsp;#{i}</span>
                     <a href="{url}" style="color: #1E88E5; text-decoration: none; word-break: break-all; font-size: 13px;">
                         {url}
                     </a>
-                    <div style="color: #666; font-size: 11px; margin-top: 5px; margin-left: 25px;">
-                        &nbsp;&nbsp;&nbsp;&nbsp;: {desc_text}
-                    </div>
+                    {desc_html}
                 </div>
                 """
             

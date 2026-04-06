@@ -465,7 +465,7 @@ class AllRoomsSummaryOptionsDialog(QDialog):
         """)
 
         from full_config import LLM_PROVIDERS, config
-        llm_flags = {"glm": "🇨🇳", "chatgpt": "🇺🇸", "minimax": "🇨🇳", "perplexity": "🇺🇸"}
+        llm_flags = {"glm": "🇨🇳", "chatgpt": "🇺🇸", "minimax": "🇨🇳", "perplexity": "🇺🇸", "grok": "🇺🇸", "qwen-or": "🇨🇳", "qwen-kilo": "🇨🇳", "ollama": "🖥️"}
         default_key = config.DEFAULT_PROVIDER
         current_idx = 0
         for idx, (key, prov) in enumerate(LLM_PROVIDERS.items()):
@@ -655,7 +655,7 @@ class SummaryOptionsDialog(QDialog):
         
         # LLM 목록 추가
         from full_config import LLM_PROVIDERS, config
-        llm_flags = {"glm": "🇨🇳", "chatgpt": "🇺🇸", "minimax": "🇨🇳", "perplexity": "🇺🇸"}
+        llm_flags = {"glm": "🇨🇳", "chatgpt": "🇺🇸", "minimax": "🇨🇳", "perplexity": "🇺🇸", "grok": "🇺🇸", "qwen-or": "🇨🇳", "qwen-kilo": "🇨🇳", "ollama": "🖥️"}
         default_key = config.DEFAULT_PROVIDER
         current_idx = 0
         for idx, (key, prov) in enumerate(LLM_PROVIDERS.items()):

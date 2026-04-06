@@ -42,7 +42,7 @@ class LLMClient:
         self.api_key = config.get_api_key()
         self.logger = config.logger
         
-        if not self.api_key:
+        if not self.api_key and self.provider_info.env_key:
             self.logger.warning(f"{self.provider_info.env_key} is not set.")
 
     def _wait_for_rate_limit(self):
@@ -73,7 +73,7 @@ class LLMClient:
             - usage: 토큰 사용량 정보 (성공 시)
             - error: 에러 메시지 (실패 시)
         """
-        if not self.api_key:
+        if not self.api_key and self.provider_info.env_key:
              return {"success": False, "error": f"API Key is missing. Set {self.provider_info.env_key}"}
 
         # ChatGPT Rate Limit 대기
@@ -86,13 +86,15 @@ class LLMClient:
 
         payload = {
             "model": self.provider_info.model,
-            "max_tokens": 16000,
+            "max_tokens": self.provider_info.max_tokens,
             "temperature": 0.5,
             "messages": [
                 {"role": "system", "content": "You are a native South Korean AI assistant. You MUST write your response ONLY in pure Korean (Hangul) and English. You are STRICTLY FORBIDDEN from outputting any Chinese characters (Hanzi/漢字/中文, e.g., 們, 推荐, 暂), Japanese characters (Hiragana/Katakana/Kanji, e.g., なし, が), or Arabic. Translate everything into natural Korean. If there is no data, say '없음'."},
                 {"role": "user", "content": config.PROMPT_TEMPLATE.format(text=text)}
             ]
         }
+        if self.provider_info.reasoning_effort:
+            payload["reasoning_effort"] = self.provider_info.reasoning_effort
 
         # [Retry Logic] 최대 3회 재시도
         max_retries = 3
@@ -100,12 +102,13 @@ class LLMClient:
         
         for attempt in range(max_retries):
             try:
-                self.logger.info(f"[{self.provider_info.name}] Sending request (Attempt {attempt+1}/{max_retries})...")
-                
+                self.logger.info(f"[{self.provider_info.name}] 요청 전송... (시도 {attempt+1}/{max_retries})")
+                request_start = time.time()
+
                 # ChatGPT 요청 시간 기록
                 if config.current_provider == "chatgpt":
                     LLMClient._last_chatgpt_request_time = time.time()
-                
+
                 # 스트리밍으로 응답 받기 (연결 60초, 읽기 600초)
                 response = requests.post(
                     self.provider_info.api_url,
@@ -114,11 +117,19 @@ class LLMClient:
                     timeout=(60, 600),  # (connect_timeout, read_timeout)
                     stream=True
                 )
-                
+
+                elapsed = time.time() - request_start
+
                 if response.status_code == 200:
                     # 성공 시 루프 탈출
                     content = response.content.decode('utf-8')
-                    return self._parse_response_text(content)
+                    result = self._parse_response_text(content)
+                    if result.get("success"):
+                        tokens = result.get("usage", {}).get("total_tokens", "?")
+                        self.logger.info(f"[{self.provider_info.name}] ✅ 성공 ({elapsed:.0f}초, {tokens} tokens)")
+                    else:
+                        self.logger.warning(f"[{self.provider_info.name}] ⚠️ 응답 검증 실패 ({elapsed:.0f}초): {result.get('error', '')}")
+                    return result
                 elif response.status_code >= 500:
                     # 500번대 에러는 재시도
                     error_msg = f"API Error {response.status_code}: {response.text}"

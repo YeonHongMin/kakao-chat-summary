@@ -37,10 +37,10 @@ DETAIL_PROMPT_TEMPLATE = """다음은 카카오톡 오픈채팅방 '{room_name}'
 ## 필수 출력 구조
 
 <h1>🧠 핵심 주제를 반영한 제목 ({date_str})</h1>
-<blockquote><p><strong>데이터:</strong> {room_name} 카카오톡 채팅 분석 | <strong>주요 키워드 TOP 5:</strong> 키워드1(빈도), 키워드2(빈도), 키워드3(빈도), 키워드4(빈도), 키워드5(빈도)</p></blockquote>
+<blockquote><p><strong>데이터:</strong> {room_name} 카카오톡 채팅 분석 | <strong>주요 키워드 TOP 20:</strong> 키워드1(빈도), 키워드2(빈도), ..., 키워드20(빈도) (대화에서 실제 등장한 키워드가 20개 미만이면 있는 만큼만 표기)</p></blockquote>
 <p>전체 대화의 핵심 흐름을 2~3문장으로 요약하는 개요 문단</p>
 
---- 아래를 4~7개 토픽으로 반복 ---
+--- 아래를 토픽 수만큼 반복 (대화에서 논의된 모든 주제를 빠짐없이 토픽으로 만드세요. 최소 5개, 대화량이 많으면 10~20개 이상도 가능합니다. 짧은 언급이라도 독립 토픽으로 분리하세요.) ---
 
 <h2>N. 토픽 제목</h2>
 <p>토픽 설명 3~5문장. 실제 발언자 @닉네임을 인용하여 근거를 제시하세요.</p>
@@ -86,12 +86,12 @@ DETAIL_PROMPT_TEMPLATE = """다음은 카카오톡 오픈채팅방 '{room_name}'
 ## 작성 규칙
 - HTML 태그만 사용 (<h1>, <h2>, <p>, <ul>, <ol>, <li>, <blockquote>, <strong>, <a> 등)
 - **URL 처리 (최우선 규칙 — 반드시 준수)**:
-  - 대화 텍스트에서 http:// 또는 https://로 시작하는 모든 URL을 **하나도 빠짐없이** 추출
-  - YouTube(youtube.com, youtu.be), GitHub, X(twitter/x.com), 블로그, 뉴스 등 모든 도메인 포함
+  - 대화 텍스트에서 http:// 또는 https://로 시작하는 **모든 URL을 하나도 빠짐없이 100% 추출** (누락 시 시스템 에러 발생)
+  - YouTube(youtube.com, youtu.be), GitHub, X(twitter/x.com), 블로그, 뉴스, npm, PyPI 등 **모든 도메인** 포함
   - 짧은 URL(youtu.be/...), 리다이렉트 URL, 쿼리 파라미터가 긴 URL도 원본 그대로 포함
   - 단순 도메인 URL(예: https://www.minimax.io/)도 반드시 포함
   - 각 토픽의 근거 항목에 관련 URL이 있으면 <a href="URL">🔗</a>로 포함
-  - "🔗 공유된 URL 모음" 섹션에 대화의 **모든 URL을 빠짐없이** 모아 정리
+  - "🔗 공유된 URL 모음" 섹션에 대화의 **모든 URL을 빠짐없이** 모아 정리 — 대화 텍스트를 처음부터 끝까지 스캔하여 URL을 하나씩 확인하세요
   - 각 URL은 <div class="url-card"> 구조를 사용하여 '내용', '시사점', '활용' 방안을 구체적으로 작성하고 공유자(@닉네임) 표기
   - 토픽과 관련 없는 URL이라도 "🔗 공유된 URL 모음"에는 반드시 포함
   - URL이 없는 대화라면 이 섹션을 생략
@@ -281,7 +281,7 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
         return {"success": False, "error": f"Unknown provider: {provider}"}
 
     api_key = config.get_api_key(provider)
-    if not api_key:
+    if not api_key and provider_info.env_key:
         return {"success": False, "error": f"API Key가 설정되지 않았습니다: {provider_info.env_key}"}
 
     # ChatGPT Rate Limit
@@ -301,20 +301,23 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
 
     payload = {
         "model": provider_info.model,
-        "max_tokens": 16000,
+        "max_tokens": provider_info.max_tokens,
         "temperature": 0.5,
         "messages": [
             {"role": "system", "content": "You are a native South Korean AI assistant. You MUST write your response ONLY in pure Korean (Hangul) and English. You are STRICTLY FORBIDDEN from outputting any Chinese characters (Hanzi/漢字/中文, e.g., 們, 推荐, 暂), Japanese characters (Hiragana/Katakana/Kanji, e.g., なし, が), or Arabic. Translate everything into natural Korean. If there is no data, say '없음'."},
             {"role": "user", "content": prompt}
         ]
     }
+    if provider_info.reasoning_effort:
+        payload["reasoning_effort"] = provider_info.reasoning_effort
 
     max_retries = 3
     retry_delay = 2
 
     for attempt in range(max_retries):
         try:
-            logger.info(f"[Detail/{provider_info.name}] 요청 전송 (시도 {attempt + 1}/{max_retries})...")
+            logger.info(f"[Detail/{provider_info.name}] 요청 전송... (시도 {attempt + 1}/{max_retries})")
+            request_start = time.time()
 
             if provider == "chatgpt":
                 _last_chatgpt_request_time = time.time()
@@ -326,6 +329,8 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                 timeout=(60, 600),
                 stream=True
             )
+
+            elapsed = time.time() - request_start
 
             if response.status_code == 200:
                 data = json.loads(response.content.decode('utf-8'))
@@ -350,8 +355,10 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                 # 검증
                 validation = validate_detail_response(content)
                 if not validation["valid"]:
+                    logger.warning(f"[Detail/{provider_info.name}] ⚠️ 응답 검증 실패 ({elapsed:.0f}초): {validation['reason']}")
                     return {"success": False, "error": validation["reason"]}
 
+                logger.info(f"[Detail/{provider_info.name}] ✅ 성공 ({elapsed:.0f}초)")
                 return {"success": True, "content": content}
 
             elif response.status_code >= 500:

@@ -39,6 +39,8 @@ class LLMProvider:
     api_url: str
     model: str
     env_key: str
+    max_tokens: int = 16000
+    reasoning_effort: str = ""  # "high", "medium", "low", "none", "" (미지정)
 
 
 # 지원하는 LLM 제공자 목록
@@ -67,6 +69,31 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
         model="sonar",
         env_key="PERPLEXITY_API_KEY"
     ),
+    "grok": LLMProvider(
+        name="xAI Grok",
+        api_url="https://api.x.ai/v1/chat/completions",
+        model="grok-4-1-fast-non-reasoning",
+        env_key="XAI_API_KEY"
+    ),
+    "qwen-or": LLMProvider(
+        name="Qwen3 (OpenRouter)",
+        api_url="https://openrouter.ai/api/v1/chat/completions",
+        model="qwen/qwen3.5-397b-a17b",
+        env_key="OPENROUTER_API_KEY"
+    ),
+    "qwen-kilo": LLMProvider(
+        name="Qwen3 (Kilo)",
+        api_url="https://api.kilo.ai/api/gateway/chat/completions",
+        model="qwen/qwen3.5-397b-a17b",
+        env_key="KILO_API_KEY"
+    ),
+    "ollama": LLMProvider(
+        name="Local LLM",
+        api_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/") + "/v1/chat/completions",
+        model=os.getenv("OLLAMA_MODEL", "qwen35-35b-maxctx"),
+        env_key="",
+        reasoning_effort=os.getenv("OLLAMA_REASONING_EFFORT", "none")
+    ),
 }
 
 
@@ -94,15 +121,15 @@ class Config:
 - 추천받은 라이브러리, 유용한 단축키, 명령어, 팁 등
 
 ### 🔗 링크/URL
-(이 섹션 헤더는 정확히 '### 🔗 링크/URL'로 작성하세요. 대화에서 공유된 모든 URL을 빠짐없이 아래 형식으로 정리하세요.)
+(이 섹션 헤더는 정확히 '### 🔗 링크/URL'로 작성하세요. 대화에서 공유된 모든 URL을 빠짐없이 아래 형식으로 정리하세요. 각 항목은 반드시 실제 URL(https://...)로 시작해야 합니다.)
 
-- URL
+- https://example.com/actual-url
   제목 또는 설명 (@공유자)
   **내용** — 어떤 내용인지 구체적으로 요약
   **시사점** — 대화에서 이 링크가 논의된 맥락과 의미
   **활용** — 이 링크를 어떻게 참고하거나 활용하면 좋을지
 
-(위 형식을 URL 개수만큼 반복. URL이 없으면 "공유된 URL 없음"으로 표기)
+(위 형식에서 https://example.com/actual-url 부분에 대화에서 실제 공유된 URL을 넣으세요. URL 개수만큼 반복. URL이 없으면 "공유된 URL 없음"으로 표기)
 
 ### 📅 일정 및 공지
 일정, 모임, 주요 공지사항
@@ -150,6 +177,8 @@ class Config:
     def get_api_key(self, provider: Optional[str] = None) -> Optional[str]:
         provider = provider or self.current_provider
         provider_info = LLM_PROVIDERS[provider]
+        if not provider_info.env_key:
+            return "no-key-needed"
         if provider in self._api_keys and self._api_keys[provider]:
             key = self._api_keys[provider]
             return None if self._is_placeholder(key) else key
@@ -174,23 +203,35 @@ class Config:
         log_filename = f"summarizer_{datetime.now().strftime('%Y%m%d')}.log"
         log_path = self.logs_dir / log_filename
         
-        # 파일 핸들러 (상세 로그)
+        # 파일 핸들러 (상세 로그 - DEBUG 이상)
         file_handler = logging.FileHandler(log_path, encoding='utf-8')
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(logging.Formatter(
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         ))
-        
+
+        # INFO 전용 파일 핸들러 (요약 진행/속도 확인용)
+        info_log_filename = f"info_{datetime.now().strftime('%Y%m%d')}.log"
+        info_log_path = self.logs_dir / info_log_filename
+        info_handler = logging.FileHandler(info_log_path, encoding='utf-8')
+        info_handler.setLevel(logging.INFO)
+        info_handler.addFilter(lambda record: record.levelno == logging.INFO)
+        info_handler.setFormatter(logging.Formatter(
+            '%(asctime)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        ))
+
         # 콘솔 핸들러 (간단한 로그)
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.WARNING)  # 콘솔에는 경고 이상만
         console_handler.setFormatter(logging.Formatter('%(message)s'))
-        
+
         # 로거 설정
         logger = logging.getLogger("KakaoSummarizer")
         logger.setLevel(logging.DEBUG)
         logger.addHandler(file_handler)
+        logger.addHandler(info_handler)
         logger.addHandler(console_handler)
 
     @property

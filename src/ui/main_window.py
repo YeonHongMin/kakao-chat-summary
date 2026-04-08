@@ -471,7 +471,10 @@ class AllRoomsSummaryOptionsDialog(QDialog):
         for idx, (key, prov) in enumerate(LLM_PROVIDERS.items()):
             suffix = " (기본)" if key == default_key else ""
             flag = llm_flags.get(key, "🌐")
-            label = f"{flag} {prov.name} {prov.model}{suffix}"
+            if key in {"qwen-or", "qwen-kilo"}:
+                label = f"{flag} {prov.name}{suffix}"
+            else:
+                label = f"{flag} {prov.name} {prov.model}{suffix}"
             self.llm_combo.addItem(label, key)
             if key == current_llm:
                 current_idx = idx
@@ -661,7 +664,10 @@ class SummaryOptionsDialog(QDialog):
         for idx, (key, prov) in enumerate(LLM_PROVIDERS.items()):
             suffix = " (기본)" if key == default_key else ""
             flag = llm_flags.get(key, "🌐")
-            label = f"{flag} {prov.name} {prov.model}{suffix}"
+            if key in {"qwen-or", "qwen-kilo"}:
+                label = f"{flag} {prov.name}{suffix}"
+            else:
+                label = f"{flag} {prov.name} {prov.model}{suffix}"
             self.llm_combo.addItem(label, key)
             if key == current_llm:
                 current_idx = idx
@@ -4374,8 +4380,8 @@ class MainWindow(QMainWindow):
 
         if has_detail:
             detail_html = storage.load_detail_summary(room_name, date_str)
+            detail_html = self._sanitize_detail_html_for_qt(detail_html)
             # HTML 파일에서 body 콘텐츠만 추출하여 QTextBrowser에 표시
-            import re
             body_match = re.search(
                 r'<div class="container">(.*)</div>\s*</body>',
                 detail_html, re.DOTALL
@@ -4404,6 +4410,16 @@ class MainWindow(QMainWindow):
                     <p style="font-size: 12px; color: #AAA;">'🔍 상세 생성' 버튼을 클릭하세요</p>
                 </div>
             """)
+
+    @staticmethod
+    def _sanitize_detail_html_for_qt(detail_html: str) -> str:
+        """QTextBrowser is stricter than browsers; repair a few common malformed closing tags."""
+        if not detail_html:
+            return detail_html
+
+        fixed_html = re.sub(r'</h([1-6])p>', r'</h\1>', detail_html, flags=re.IGNORECASE)
+        fixed_html = fixed_html.replace("</hp>", "</h2>")
+        return fixed_html
 
     def _on_generate_detail_summary(self):
         """상세 분석 생성."""
@@ -5068,7 +5084,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.8.0</p>
+            <p>버전 2.8.3</p>
             <p>카카오톡 대화를 분석하고 AI로 요약하는 도구입니다.</p>
             <p>제작자: 민연홍<br>
             <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>

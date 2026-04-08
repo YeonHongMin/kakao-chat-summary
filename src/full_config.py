@@ -76,15 +76,15 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
         env_key="XAI_API_KEY"
     ),
     "qwen-or": LLMProvider(
-        name="Qwen3 (OpenRouter)",
+        name="OpenRouter",
         api_url="https://openrouter.ai/api/v1/chat/completions",
-        model="qwen/qwen3.5-397b-a17b",
+        model=os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat"),
         env_key="OPENROUTER_API_KEY"
     ),
     "qwen-kilo": LLMProvider(
-        name="Qwen3 (Kilo)",
+        name="Kilo",
         api_url="https://api.kilo.ai/api/gateway/chat/completions",
-        model="qwen/qwen3.5-397b-a17b",
+        model=os.getenv("KILO_MODEL", "deepseek/deepseek-chat"),
         env_key="KILO_API_KEY"
     ),
     "ollama": LLMProvider(

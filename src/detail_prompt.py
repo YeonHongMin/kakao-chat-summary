@@ -40,7 +40,7 @@ DETAIL_PROMPT_TEMPLATE = """다음은 카카오톡 오픈채팅방 '{room_name}'
 <blockquote><p><strong>데이터:</strong> {room_name} 카카오톡 채팅 분석 | <strong>주요 키워드 TOP 20:</strong> 키워드1(빈도), 키워드2(빈도), ..., 키워드20(빈도) (대화에서 실제 등장한 키워드가 20개 미만이면 있는 만큼만 표기)</p></blockquote>
 <p>전체 대화의 핵심 흐름을 2~3문장으로 요약하는 개요 문단</p>
 
---- 아래를 토픽 수만큼 반복 (대화에서 논의된 모든 주제를 빠짐없이 토픽으로 만드세요. 최소 5개, 대화량이 많으면 10~20개 이상도 가능합니다. 짧은 언급이라도 독립 토픽으로 분리하세요.) ---
+--- 아래를 토픽 수만큼 반복 (대화에서 논의된 모든 주제를 빠짐없이 토픽으로 만드세요. 대화량이 적어도 20개 이상, 많으면 30~40개 이상도 가능합니다. 짧은 언급이라도 독립 토픽으로 분리하세요. 토픽 수를 줄이지 마세요.) ---
 
 <h2>N. 토픽 제목</h2>
 <p>토픽 설명 3~5문장. 실제 발언자 @닉네임을 인용하여 근거를 제시하세요.</p>
@@ -307,6 +307,13 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
             wait_time = _CHATGPT_RATE_LIMIT_DELAY - elapsed
             logger.info(f"[Detail/ChatGPT] Rate Limit 대기 {wait_time:.1f}s...")
             time.sleep(wait_time)
+
+    # 입력 컨텍스트 초과 방지: max_input_chars가 설정된 프로바이더는 텍스트 잘라내기
+    if provider_info.max_input_chars > 0 and len(text) > provider_info.max_input_chars:
+        logger.warning(
+            f"[Detail/{provider_info.name}] 입력 텍스트 {len(text):,}자가 한계({provider_info.max_input_chars:,}자) 초과 — 앞부분만 사용합니다."
+        )
+        text = text[:provider_info.max_input_chars]
 
     prompt = generate_detail_prompt(text, room_name, date_str)
 

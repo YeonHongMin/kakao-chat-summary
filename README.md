@@ -1,6 +1,6 @@
 # 📱 KakaoTalk Chat Summarizer
 
-> **v2.8.3** | 최종 업데이트: 2026-04-08
+> **v2.8.4** | 최종 업데이트: 2026-04-09
 
 카카오톡 대화 내보내기 파일을 AI(LLM)를 활용하여 날짜별로 자동 요약하는 **데스크톱 GUI 애플리케이션**입니다.
 
@@ -44,10 +44,15 @@
 
 | LLM | 키 | 환경변수 | 모델 | 비고 |
 |-----|-----|----------|------|------|
-| Z.AI GLM | `glm` | `ZAI_API_KEY` | glm-4.7 | 기본, 권장 |
-| OpenAI | `chatgpt` | `OPENAI_API_KEY` | gpt-4o-mini | ⚠️ Rate Limit |
-| MiniMax | `minimax` | `MINIMAX_API_KEY` | MiniMax-M2.1 | 고속 처리 |
-| Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | sonar | |
+| Z.AI GLM | `glm` | `ZAI_API_KEY` | glm-4.5 | 무제한 입력 / 최대 16,000출력 (기본, 권장) |
+| MiniMax | `minimax` | `MINIMAX_API_KEY` | MiniMax-M2.7 | 무제한 입력 / 최대 16,000출력 (고용량, 200k) |
+| OpenAI | `chatgpt` | `OPENAI_API_KEY` | gpt-4o-mini | 무제한 입력 / 최대 16,000출력 (⚠️ Rate Limit) |
+| Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | sonar | 무제한 입력 / 최대 16,000출력 |
+| DeepSeek(OR) | `qwen-or` | `OPENROUTER_API_KEY` | deepseek-chat | ⚠️ **최대 4만자 입력** / 8,000출력 제한 |
+| DeepSeek(Kilo)| `qwen-kilo` | `KILO_API_KEY` | deepseek-chat | ⚠️ **최대 4만자 입력** / 8,000출력 제한 |
+
+> **💡 LLM 모델 컨텍스트 제약 사항 (v2.8.4)**
+> 대화량이 방대할 경우(수백 KB 이상의 대화 내역), **DeepSeek 모델(32K 한계)은 자체 컨텍스트 윈도우 한계를 초과하여 에러가 발생합니다.** 이를 막기위해 **입력 문자열을 40,000자로 강제 제한(앞부분만 잘라냄)하고 출력수도 8,000 토큰으로 제약**하고 있습니다. 대화량이 많아 생성할 토픽 수가 많을 것으로 예상되는 긴 채빙팅방은 컨텍스트가 광활한 **MiniMax(200K)나 GLM(128K) 모델 사용을 적극 권장**합니다.
 
 ---
 
@@ -245,6 +250,11 @@ logs/summarizer_20260201.log
 ---
 
 ## 📝 변경 이력
+
+### v2.8.4 (2026-04-09) - DeepSeek 허용치 오버플로우 방지 및 정책 개선
+- 🔧 **DeepSeek 컨텍스트 오버플로우 방지**: `qwen-or` 및 `qwen-kilo` 제공자에 대해 입력 문자열을 40,000자로 제약 및 출력 토큰을 8000으로 제한하여 내부 API 400 에러 사전 방지.
+- 🔧 **상세 분석 토픽 추출량 상향**: 상세 분석 프롬프트의 토픽 추출 개수 제약을 최소 20개 이상(최대 수십 개) 생산해내도록 변경하여 훨씬 밀도 높은 데이터 조회를 도모.
+- 🐛 **자동 동기화 버그 픽스**: `main_window.py` - 자동 동기화 기능에서 발생하는 Logger NameError 해결.
 
 ### v2.8.3 (2026-04-08) - 상세 분석 앱 렌더링 보정
 - `QTextBrowser`에서 일반 브라우저보다 엄격하게 처리되는 잘못된 닫힘 태그(`</hp>` 등)를 앱 표시 시 보정

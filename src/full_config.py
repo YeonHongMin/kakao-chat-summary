@@ -41,6 +41,7 @@ class LLMProvider:
     env_key: str
     max_tokens: int = 16000
     reasoning_effort: str = ""  # "high", "medium", "low", "none", "" (미지정)
+    max_input_chars: int = 0    # 0 = 무제한. 컨텍스트 윈도우가 작은 모델에 설정
 
 
 # 지원하는 LLM 제공자 목록
@@ -79,13 +80,17 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
         name="OpenRouter",
         api_url="https://openrouter.ai/api/v1/chat/completions",
         model=os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat"),
-        env_key="OPENROUTER_API_KEY"
+        env_key="OPENROUTER_API_KEY",
+        max_tokens=8000,        # deepseek/deepseek-chat OpenRouter max output: 8192
+        max_input_chars=40000,  # context 32K tokens; ~2 chars/token for Korean, minus prompt+output overhead
     ),
     "qwen-kilo": LLMProvider(
         name="Kilo",
         api_url="https://api.kilo.ai/api/gateway/chat/completions",
         model=os.getenv("KILO_MODEL", "deepseek/deepseek-chat"),
-        env_key="KILO_API_KEY"
+        env_key="KILO_API_KEY",
+        max_tokens=8000,        # deepseek model: max output 8192
+        max_input_chars=40000,  # context 32K tokens; same truncation limit
     ),
     "ollama": LLMProvider(
         name="Local LLM",

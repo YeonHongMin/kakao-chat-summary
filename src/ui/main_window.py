@@ -1,6 +1,7 @@
 """메인 윈도우 - 카카오톡 스타일 대화 분석기."""
 import sys
 import re
+import logging
 from pathlib import Path
 from datetime import datetime, timedelta, date
 from typing import Optional, List, Dict, Any
@@ -25,6 +26,8 @@ from parser import KakaoLogParser
 from db import get_db, ChatRoom, Message
 from file_storage import get_storage
 from url_extractor import extract_urls_from_text, save_urls_to_file, deduplicate_urls
+
+logger = logging.getLogger("KakaoSummarizer")
 
 
 class MessageParser:
@@ -5084,7 +5087,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.8.3</p>
+            <p>버전 2.8.4</p>
             <p>카카오톡 대화를 분석하고 AI로 요약하는 도구입니다.</p>
             <p>제작자: 민연홍<br>
             <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>

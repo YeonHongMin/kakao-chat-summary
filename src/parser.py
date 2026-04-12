@@ -68,7 +68,17 @@ class KakaoLogParser:
         if filepath.suffix.lower() == '.csv':
             return self._parse_csv(filepath)
 
-        text = filepath.read_text(encoding='utf-8')
+        encodings = ['utf-8', 'utf-8-sig', 'cp949', 'euc-kr']
+        text = ""
+        for enc in encodings:
+            try:
+                text = filepath.read_text(encoding=enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            raise ValueError(f"지원되지 않는 파일 인코딩입니다: {filepath}")
+
         lines = text.splitlines()
         
         messages_by_date = defaultdict(list)
@@ -159,7 +169,23 @@ class KakaoLogParser:
         """
         messages_by_date = defaultdict(list)
         
-        with filepath.open('r', encoding='utf-8', newline='') as f:
+        encodings = ['utf-8', 'utf-8-sig', 'cp949', 'euc-kr']
+        f = None
+        for enc in encodings:
+            try:
+                f = filepath.open('r', encoding=enc, newline='')
+                # 인코딩 테스트
+                f.read(1024)
+                f.seek(0)
+                break
+            except UnicodeDecodeError:
+                if f:
+                    f.close()
+                continue
+        else:
+            raise ValueError(f"지원되지 않는 파일 인코딩입니다: {filepath}")
+
+        try:
             reader = csv.reader(f)
             try:
                 header = next(reader)
@@ -189,6 +215,10 @@ class KakaoLogParser:
                 
                 formatted_line = f"[{user}] [{am_pm} {hr}:{minute}] {message}"
                 messages_by_date[date_key].append(formatted_line)
+                
+        finally:
+            if f:
+                f.close()
                 
         return ParseResult(
             messages_by_date=dict(messages_by_date),

@@ -32,3 +32,7 @@ Thumbs.db
 # Gemini / AI agents
 .gemini/
 .claude/
+.kilo/
+
+# Test (임시)
+test_sync.py

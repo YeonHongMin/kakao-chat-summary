@@ -1,21 +1,20 @@
-# 📱 KakaoTalk Chat Summarizer
+# 💬 카카오톡 대화 분석기 (KakaoTalk Chat Summarizer)
 
-> **v2.8.4** | 최종 업데이트: 2026-04-09
+> **v2.9.0** | 최종 업데이트: 2026-04-13
 
-카카오톡 대화 내보내기 파일을 AI(LLM)를 활용하여 날짜별로 자동 요약하는 **데스크톱 GUI 애플리케이션**입니다.
+카카오톡 대화 내보내기 파일을 AI(LLM)를 활용하여 날짜별로 **상세 분석 HTML**을 생성하는 **데스크톱 GUI 애플리케이션**입니다.
 
 ## ✨ 주요 기능
 
 - 🖥️ **데스크톱 GUI**: PySide6 기반 네이티브 앱 (카카오톡 스타일 UI)
-- 📅 **날짜별 요약**: 대화를 날짜별로 파싱하여 각각 요약 생성
-- 🤖 **다중 LLM 지원**: GLM, OpenAI, MiniMax, Perplexity 선택 가능
-- 🌐 **전체 채팅방 일괄 처리**: 모든 채팅방 LLM 요약/URL 동기화를 한 번에 수행 (v2.7.0)
-- 🔍 **상세 분석 HTML**: 토픽별 심층 분석 + URL 모음 + 감정 분석을 다크 테마 HTML로 생성 (v2.8.0)
-- 🔗 **URL 자동 추출**: 요약본에서 공유된 링크를 별도 탭에서 확인 (최근 3일/1주/전체)
-- 📊 **대시보드**: 채팅방 통계 및 최근 요약 확인
+- 🔍 **상세 분석 HTML**: 토픽별 심층 분석 + URL 모음 + 감정 분석을 다크 테마 HTML로 생성
+- 🤖 **다중 LLM 지원**: GLM, OpenAI, MiniMax, Perplexity, Grok, OpenRouter, Kilo, Ollama
+- 🌐 **전체 채팅방 일괄 처리**: 모든 채팅방 상세 분석/URL 동기화를 한 번에 수행
+- 🔗 **URL 자동 추출**: 상세 분석 HTML에서 공유된 링크를 별도 탭에서 확인
+- 📊 **대시보드**: 채팅방 통계 확인
 - 💾 **수동/자동 백업**: 파일 기반 저장 + 타임스탬프 전체 백업 (Ctrl+B)
-- 🔄 **스마트 요약**: 메시지 내용 해시 비교로 실제 변경된 날짜만 요약 재생성
-- 🛡️ **스레드 안전**: 백그라운드 워커별 독립 DB 인스턴스 (v2.4.0)
+- 🔄 **스마트 무효화**: 메시지 내용 해시 비교로 실제 변경된 날짜만 재생성
+- 🛡️ **스레드 안전**: 백그라운드 워커별 독립 DB 인스턴스
 
 ---
 
@@ -56,16 +55,15 @@
 
 ---
 
-## 📋 요약 결과 섹션
+## 📋 상세 분석 결과 구조
 
 | 섹션 | 내용 |
 |------|------|
-| 🌟 3줄 요약 | 핵심 내용을 3문장으로 압축 |
-| ❓ Q&A | 질문과 답변 정리 |
-| 💬 주요 토픽 | 논의된 주제와 결론 |
-| 💡 꿀팁 | 추천된 도구, 라이브러리, 팁 |
-| 🔗 링크/URL | 공유된 중요 링크 |
-| 📅 일정/공지 | 일정 및 공지사항 |
+| 🧠 핵심 제목 + 키워드 TOP 20 | 대화 핵심 흐름 요약 |
+| 📝 토픽별 분석 (20~40개) | 발언자 인용 + 근거 + 시사점 |
+| 📊 감정/온도 분석 | 과열/성장/주의/패러다임 전환 신호 |
+| 🎯 핵심 시사점 | 대화에서 얻을 수 있는 인사이트 |
+| 🔗 공유된 URL 모음 | 내용/시사점/활용 구조 |
 
 ---
 
@@ -112,8 +110,8 @@ python src/app.py
 
 1. **채팅방 만들기**: 좌측 하단 `➕ 채팅방 만들기` 클릭 (Enter 키로 즉시 생성)
 2. **파일 업로드**: `📤 파일 업로드` 클릭 → 카카오톡 내보내기 .txt 또는 .csv 파일 선택
-3. **요약 생성**: 메뉴 → 도구 → `LLM 요약 생성` 클릭
-4. **전체 채팅방 일괄 요약**: 메뉴 → 도구 → `🌐 전체 채팅방 LLM 요약 생성` (Ctrl+Shift+G)
+3. **상세 분석 생성**: 메뉴 → 도구 → `🔍 상세 분석 생성` (Ctrl+G)
+4. **전체 채팅방 일괄 분석**: 메뉴 → 도구 → `🌐 전체 채팅방 상세 분석 생성` (Ctrl+Shift+G)
 5. **전체 채팅방 URL 동기화**: 메뉴 → 도구 → `🌐 전체 채팅방 URL 동기화` (Ctrl+Shift+U)
 6. **채팅방 삭제**: 채팅방 선택 후 메뉴 → 파일 → `채팅방 삭제...` 클릭
 7. **결과 확인**: 탭에서 대시보드, 날짜별 요약, URL 정보 확인
@@ -141,22 +139,19 @@ kakao-chat-summary/
 │   ├── file_storage.py          # FileStorage 클래스
 │   ├── full_config.py           # Config 클래스 (LLM 설정)
 │   ├── parser.py                # KakaoLogParser 클래스
-│   ├── llm_client.py            # LLMClient 클래스
-│   ├── chat_processor.py        # ChatProcessor 클래스
-│   ├── url_extractor.py         # URL 추출 함수
+│   ├── detail_prompt.py         # 상세 분석 프롬프트 + HTML 템플릿 + LLM API
+│   ├── url_extractor.py         # URL 추출 (마크다운 + HTML 파싱)
 │   ├── import_to_db.py          # DB import 유틸
-│   ├── scheduler/
-│   │   └── tasks.py             # SyncScheduler (프레임워크 구현, 앱 미연동)
-│   └── manual/                  # CLI 스크립트 (수동 요약용, 레거시)
+│   └── scheduler/
+│       └── tasks.py             # SyncScheduler (프레임워크 구현, 앱 미연동)
 │
 ├── data/
 │   ├── db/                      # SQLite 데이터베이스
 │   │   └── chat_history.db
 │   ├── original/<채팅방>/       # 원본 대화 (일별 MD)
-│   ├── summary/<채팅방>/        # LLM 요약 (일별 MD)
+│   ├── detail_summary/<채팅방>/ # 상세 분석 HTML
 │   └── url/<채팅방>/            # URL 목록 (3개 파일)
 │
-├── output/                      # CLI 스크립트 (src/manual/) 출력 디렉터리
 ├── upload/                      # 파일 업로드 기본 디렉터리
 ├── logs/                        # 로그 파일
 ├── docs/                        # 문서
@@ -164,31 +159,6 @@ kakao-chat-summary/
 ├── requirements.txt
 ├── CLAUDE.md                    # AI 에이전트 컨텍스트
 └── README.md
-```
-
----
-
-## 🔧 CLI 도구 (수동 요약용, 레거시)
-
-`src/manual/` 디렉터리의 CLI 스크립트는 GUI 앱과 별개로 동작합니다.
-DB/FileStorage를 사용하지 않으며, 결과는 `output/` 디렉터리에 저장됩니다.
-
-### Full 스크립트 (상세 요약)
-src/ 모듈을 재사용합니다 (`full_config`, `parser`, `chat_processor`, `url_extractor`).
-
-```bash
-python src/manual/full_date_summary.py data/채팅방.txt
-python src/manual/full_yesterday_summary.py --llm minimax data/
-python src/manual/full_2days_summary.py data/채팅방.txt
-python src/manual/full_today_summary.py --llm glm data/
-```
-
-### Simple 스크립트 (간결 요약, 음슴체)
-자체 내장 구현으로 외부 모듈 의존 없이 단독 실행 가능합니다.
-
-```bash
-python src/manual/simple_date_summary.py data/채팅방.txt
-python src/manual/simple_today_summary.py --llm glm data/
 ```
 
 ---
@@ -250,6 +220,20 @@ logs/summarizer_20260201.log
 ---
 
 ## 📝 변경 이력
+
+### v2.9.0 (2026-04-13) - 기본 요약 제거, 상세 분석 전용화
+- **BREAKING**: 기본 요약(마크다운) 파이프라인 완전 제거 — 상세 분석(HTML)이 유일한 요약 경로
+- 🗑️ `llm_client.py`, `chat_processor.py`, `src/manual/` CLI 스크립트, `SyncWorker`, 기본 요약 Workers/Dialogs 제거
+- 🆕 **상세 분석 옵션 다이얼로그** (Ctrl+G): pending/오늘/어제~오늘/전체 범위 + LLM 선택
+- 🔧 URL 추출을 마크다운 → HTML 파싱으로 전환 (`extract_urls_from_html`)
+- 🔧 전체 채팅방 상세 분석에서 DB + 파일 저장소 채팅방 통합
+- 🔧 대시보드 방 선택 속도 개선 (파일 I/O 제거)
+- 📦 `data/summary/` 기존 데이터 보존 (삭제 안 함)
+
+### v2.8.5 (2026-04-12) - 백그라운드 트레이 연동 및 한글/토큰 한계 대응
+- **시스템 트레이(상태표시줄) 확장**: 앱을 닫아도 백그라운드 트레이를 통해 상태 유지 기능을 정식 지원합니다.
+- **문자 인코딩 및 구동 최적화**: 윈도우 PowerShell 한글 깨짐 및 `pythonw` 숨김 창 문제를 완전히 수정했습니다.
+- **Ollama 환경의 Context Overflow 차단**: `max_input_chars` 및 `max_tokens` `.env.local` 로드 제어를 지원합니다.
 
 ### v2.8.4 (2026-04-09) - DeepSeek 허용치 오버플로우 방지 및 정책 개선
 - 🔧 **DeepSeek 컨텍스트 오버플로우 방지**: `qwen-or` 및 `qwen-kilo` 제공자에 대해 입력 문자열을 40,000자로 제약 및 출력 토큰을 8000으로 제한하여 내부 API 400 에러 사전 방지.

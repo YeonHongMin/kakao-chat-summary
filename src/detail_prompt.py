@@ -45,8 +45,8 @@ DETAIL_PROMPT_TEMPLATE = """다음은 카카오톡 오픈채팅방 '{room_name}'
 <h2>N. 토픽 제목</h2>
 <p>토픽 설명 3~5문장. 실제 발언자 @닉네임을 인용하여 근거를 제시하세요.</p>
 <ul>
-<li><strong>근거 제목</strong> — 구체적 설명 (@발언자) <a href="실제URL">🔗</a></li>
-<li><strong>근거 제목</strong> — 구체적 설명 (@발언자) <a href="실제URL">🔗</a></li>
+<li><strong>근거 제목</strong> — 구체적 설명 (@발언자) <a href="[여기에 논의된 실제 원본 URL 삽입]">🔗</a></li>
+<li><strong>근거 제목</strong> — 구체적 설명 (@발언자) <a href="[여기에 논의된 실제 원본 URL 삽입]">🔗</a></li>
 </ul>
 <blockquote>
 <p><strong>시사점:</strong> 이 토픽에서 얻을 수 있는 인사이트 1~2문장</p>
@@ -73,7 +73,7 @@ DETAIL_PROMPT_TEMPLATE = """다음은 카카오톡 오픈채팅방 '{room_name}'
 <h2>🔗 공유된 URL 모음</h2>
 <!-- 아래 url-card 구조를 URL 개수만큼 반복 -->
 <div class="url-card">
-<p><a href="실제URL">실제URL</a></p>
+<p><a href="[이곳에 실제 원본 URL 삽입]">[이곳에 실제 원본 URL 삽입]</a></p>
 <h3>제목 또는 사이트/리포지토리명 (@공유자)</h3>
 <ul class="url-details">
 <li><strong>내용</strong> · 어떤 내용인지 구체적으로 요약</li>
@@ -93,6 +93,7 @@ DETAIL_PROMPT_TEMPLATE = """다음은 카카오톡 오픈채팅방 '{room_name}'
   - 각 토픽의 근거 항목에 관련 URL이 있으면 <a href="URL">🔗</a>로 포함
   - "🔗 공유된 URL 모음" 섹션에 대화의 **모든 URL을 빠짐없이** 모아 정리 — 대화 텍스트를 처음부터 끝까지 스캔하여 URL을 하나씩 확인하세요
   - 각 URL은 <div class="url-card"> 구조를 사용하여 '내용', '시사점', '활용' 방안을 구체적으로 작성하고 공유자(@닉네임) 표기
+  - **절대 주의사항:** `[이곳에 실제 원본 URL 삽입]` 처럼 제가 적어둔 플레이스홀더를 그대로 복사+붙여넣기 출력하지 마세요! 반드시 대화에서 찾은 **실제 주소(예: https://...)** 로 대체해야 합니다.
   - 토픽과 관련 없는 URL이라도 "🔗 공유된 URL 모음"에는 반드시 포함
   - URL이 없는 대화라면 이 섹션을 생략
 - 발언자를 @닉네임 형태로 인용

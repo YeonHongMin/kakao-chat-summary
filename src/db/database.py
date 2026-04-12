@@ -133,6 +133,13 @@ class Database:
             if room:
                 room.last_sync_at = datetime.now()
     
+    def update_room_file_path(self, room_id: int, file_path: str):
+        """앱 폴더 이동 시 깨진 원본 파일 절대 경로 보정."""
+        with self.get_session() as session:
+            room = session.query(ChatRoom).filter(ChatRoom.id == room_id).first()
+            if room:
+                room.file_path = file_path
+    
     def delete_room(self, room_id: int):
         """채팅방 삭제 (연관 데이터 포함)."""
         with self.get_session() as session:

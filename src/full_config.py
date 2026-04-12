@@ -50,7 +50,9 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
         name="Z.AI GLM",
         api_url="https://api.z.ai/api/coding/paas/v4/chat/completions",
         model="glm-4.5",
-        env_key="ZAI_API_KEY"
+        env_key="ZAI_API_KEY",
+        max_tokens=int(os.getenv("ZAI_MAX_TOKENS", "8192")),
+        max_input_chars=int(os.getenv("ZAI_MAX_INPUT_CHARS", "1500000"))  # 약 1.5MB 문자수(대략 1M 토큰) 제한
     ),
     "chatgpt": LLMProvider(
         name="OpenAI ChatGPT",
@@ -79,24 +81,26 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
     "qwen-or": LLMProvider(
         name="OpenRouter",
         api_url="https://openrouter.ai/api/v1/chat/completions",
-        model=os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat"),
+        model=os.getenv("OPENROUTER_MODEL", "x-ai/grok-4.1-fast"),
         env_key="OPENROUTER_API_KEY",
-        max_tokens=8000,        # deepseek/deepseek-chat OpenRouter max output: 8192
-        max_input_chars=40000,  # context 32K tokens; ~2 chars/token for Korean, minus prompt+output overhead
+        max_tokens=int(os.getenv("OPENROUTER_MAX_TOKENS", "30000")),
+        max_input_chars=int(os.getenv("OPENROUTER_MAX_INPUT_CHARS", "0")),  # 0 = 무제한 (grok-4.1-fast: 2M context)
     ),
     "qwen-kilo": LLMProvider(
         name="Kilo",
         api_url="https://api.kilo.ai/api/gateway/chat/completions",
-        model=os.getenv("KILO_MODEL", "deepseek/deepseek-chat"),
+        model=os.getenv("KILO_MODEL", "x-ai/grok-4.1-fast"),
         env_key="KILO_API_KEY",
-        max_tokens=8000,        # deepseek model: max output 8192
-        max_input_chars=40000,  # context 32K tokens; same truncation limit
+        max_tokens=int(os.getenv("KILO_MAX_TOKENS", "30000")),
+        max_input_chars=int(os.getenv("KILO_MAX_INPUT_CHARS", "0")),  # 0 = 무제한 (grok-4.1-fast: 2M context)
     ),
     "ollama": LLMProvider(
         name="Local LLM",
         api_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/") + "/v1/chat/completions",
         model=os.getenv("OLLAMA_MODEL", "qwen35-35b-maxctx"),
         env_key="",
+        max_tokens=int(os.getenv("OLLAMA_MAX_TOKENS", "16000")),
+        max_input_chars=int(os.getenv("OLLAMA_MAX_INPUT_CHARS", "0")),
         reasoning_effort=os.getenv("OLLAMA_REASONING_EFFORT", "none")
     ),
 }
@@ -104,53 +108,9 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
 
 class Config:
     """애플리케이션 설정을 관리하는 싱글톤 클래스."""
-    
+
     DEFAULT_TIMEOUT = 600
     DEFAULT_PROVIDER = "glm"
-
-    PROMPT_TEMPLATE = """다음은 카카오톡 오픈채팅방의 대화 내용입니다.
-이 대화방은 정보 공유와 토론을 목적으로 합니다.
-내용을 분석하여 다음 섹션으로 체계적으로 정리해주세요:
-
-### 🌟 3줄 요약
-전체 대화의 핵심 흐름과 분위기를 3문장으로 요약
-
-### ❓ Q&A 및 해결된 문제
-- Q. [질문 내용]
-  A. [답변/해결책] (답변자 닉네임 포함)
-
-### 💬 주요 토픽 & 논의
-- [주제]: 논의된 내용, 주요 의견, 결론
-
-### 💡 꿀팁 및 도구 추천
-- 추천받은 라이브러리, 유용한 단축키, 명령어, 팁 등
-
-### 🔗 링크/URL
-(이 섹션 헤더는 정확히 '### 🔗 링크/URL'로 작성하세요. 대화에서 공유된 모든 URL을 빠짐없이 아래 형식으로 정리하세요. 각 항목은 반드시 실제 URL(https://...)로 시작해야 합니다.)
-
-- https://example.com/actual-url
-  제목 또는 설명 (@공유자)
-  **내용** — 어떤 내용인지 구체적으로 요약
-  **시사점** — 대화에서 이 링크가 논의된 맥락과 의미
-  **활용** — 이 링크를 어떻게 참고하거나 활용하면 좋을지
-
-(위 형식에서 https://example.com/actual-url 부분에 대화에서 실제 공유된 URL을 넣으세요. URL 개수만큼 반복. URL이 없으면 "공유된 URL 없음"으로 표기)
-
-### 📅 일정 및 공지
-일정, 모임, 주요 공지사항
-
-주의: "한글 설명"과 "영어 용어"로만 답변하세요. "중국어", "일본어", "아랍어" 등 다른 언어는 절대 사용하지 마세요.
-
----
-{text}
----
-
-[최종 검토 규칙] - 매우 중요
-절대로 한자(예: 推荐, 们, 中, 无)나 일본어(예: の間, が)를 출력하지 마세요. 모든 단어는 반드시 한글(한국어)로 번역해서 출력하세요. 
-예: "도구 推荐" -> "도구 추천", "내용中" -> "내용 중", "の間에서" -> "사이에서".
-출력 결과에 한자나 일본어가 단 하나라도 있으면 시스템 에러가 발생합니다! 오직 한글과 영어만 사용하세요.
-
-요약:"""
 
     def __init__(self):
         self.current_provider: str = os.getenv("LLM_PROVIDER", self.DEFAULT_PROVIDER)

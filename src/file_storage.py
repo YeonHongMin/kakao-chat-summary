@@ -294,90 +294,76 @@ class FileStorage:
         return len(messages)
     
     def get_summarized_dates(self, room_name: str) -> List[str]:
-        """요약된 날짜 목록."""
-        room_dir = self.summary_dir / self._sanitize_name(room_name)
+        """상세 분석이 완료된 날짜 목록 (v2.9.0: detail_summary 기준)."""
+        room_dir = self.detail_dir / self._sanitize_name(room_name)
         if not room_dir.exists():
             return []
-        
+
         dates = []
-        for filepath in room_dir.glob("*_summary.md"):
-            match = re.search(r'_(\d{8})_summary\.md$', filepath.name)
+        for filepath in room_dir.glob("*_detail.html"):
+            match = re.search(r'_(\d{8})_detail\.html$', filepath.name)
             if match:
                 date_compact = match.group(1)
                 date_str = f"{date_compact[:4]}-{date_compact[4:6]}-{date_compact[6:8]}"
                 dates.append(date_str)
-        
+
         return sorted(dates)
     
     # ==================== 채팅방 관리 ====================
     
     def get_all_rooms(self) -> List[str]:
-        """모든 채팅방 목록 (original, summary, url 디렉터리 스캔)."""
+        """모든 채팅방 목록 (original, detail_summary, url 디렉터리 스캔)."""
         rooms = set()
 
-        # original 디렉토리에서
-        if self.original_dir.exists():
-            for d in self.original_dir.iterdir():
-                if d.is_dir():
-                    rooms.add(d.name)
-
-        # summary 디렉토리에서
-        if self.summary_dir.exists():
-            for d in self.summary_dir.iterdir():
-                if d.is_dir():
-                    rooms.add(d.name)
-
-        # url 디렉토리에서
-        if self.url_dir.exists():
-            for d in self.url_dir.iterdir():
-                if d.is_dir():
-                    rooms.add(d.name)
+        for scan_dir in [self.original_dir, self.detail_dir, self.url_dir, self.summary_dir]:
+            if scan_dir.exists():
+                for d in scan_dir.iterdir():
+                    if d.is_dir():
+                        rooms.add(d.name)
 
         return sorted(rooms)
     
     def get_room_stats(self, room_name: str) -> Dict:
-        """채팅방 통계."""
-        safe_name = self._sanitize_name(room_name)
+        """채팅방 통계 (v2.9.0: 상세 분석 기준)."""
         original_dates = self.get_available_dates(room_name)
-        summary_dates = self.get_summarized_dates(room_name)
-        
+        detail_dates = self.get_summarized_dates(room_name)
+
         return {
             'room_name': room_name,
             'total_days': len(original_dates),
-            'summarized_days': len(summary_dates),
-            'unsummarized_days': len(set(original_dates) - set(summary_dates)),
+            'summarized_days': len(detail_dates),
+            'unsummarized_days': len(set(original_dates) - set(detail_dates)),
             'date_range': (original_dates[0], original_dates[-1]) if original_dates else (None, None)
         }
     
     def get_dates_needing_summary(self, room_name: str) -> Dict[str, str]:
         """
-        요약이 필요한 날짜 목록 반환.
+        상세 분석이 필요한 날짜 목록 반환 (v2.9.0: detail_summary 기준).
 
-        마지막 요약일(포함)부터 이후 날짜 중 요약이 없는 날짜를 반환.
-        마지막 요약일은 중간 데이터가 추가될 수 있으므로 재요약 대상에 포함.
-        요약이 전혀 없으면 모든 날짜를 반환.
+        마지막 분석일(포함)부터 이후 날짜 중 분석이 없는 날짜를 반환.
+        마지막 분석일은 중간 데이터가 추가될 수 있으므로 재분석 대상에 포함.
+        분석이 전혀 없으면 모든 날짜를 반환.
 
         Returns:
-            Dict[date_str, reason]: 날짜별 요약 필요 사유
-            - "new": 새로운 날짜 (요약 없음)
-            - "resummary": 마지막 요약일 (재요약 대상)
+            Dict[date_str, reason]: 날짜별 분석 필요 사유
+            - "new": 새로운 날짜 (분석 없음)
+            - "resummary": 마지막 분석일 (재분석 대상)
         """
         result = {}
         original_dates = self.get_available_dates(room_name)
-        summarized_dates = sorted(self.get_summarized_dates(room_name))
+        detail_dates = sorted(self.get_summarized_dates(room_name))
 
-        if summarized_dates:
-            last_summarized = summarized_dates[-1]
-            summarized_set = set(summarized_dates)
+        if detail_dates:
+            last_detail = detail_dates[-1]
+            detail_set = set(detail_dates)
 
             for date_str in original_dates:
-                if date_str == last_summarized:
+                if date_str == last_detail:
                     result[date_str] = "resummary"
-                elif date_str > last_summarized:
-                    if date_str not in summarized_set:
+                elif date_str > last_detail:
+                    if date_str not in detail_set:
                         result[date_str] = "new"
         else:
-            # 요약이 전혀 없으면 모든 날짜
             for date_str in original_dates:
                 result[date_str] = "new"
 
@@ -388,54 +374,33 @@ class FileStorage:
                                                old_count: int = 0, new_count: int = 0,
                                                threshold: int = 10) -> bool:
         """
-        메시지가 크게 변경된 경우에만 기존 요약 무효화.
-
-        호출자(FileUploadWorker)가 마지막 요약일-1일 이후 날짜만 전달하므로,
-        이 메서드는 cutoff 판단 없이 임계값만 체크합니다.
+        메시지가 크게 변경된 경우에만 상세 분석 무효화 (v2.9.0: 기본 요약 제거).
 
         무효화 조건: 메시지 10개 이상 추가 시에만 무효화
 
-        Args:
-            room_name: 채팅방 이름
-            date_str: 날짜 (YYYY-MM-DD)
-            old_hash: 저장 전 메시지 내용 해시
-            new_hash: 저장 후 메시지 내용 해시
-            old_count: 저장 전 메시지 개수
-            new_count: 저장 후 메시지 개수
-            threshold: 메시지 개수 변경 임계값 (기본 10개)
-
         Returns:
-            True if summary was invalidated
+            True if detail summary was invalidated
         """
-        # 해시 동일 → 변경 없음
         if old_hash == new_hash:
             return False
 
-        # 이전 데이터 없음 (새 날짜) → 무효화 불필요
         if not old_hash:
             return False
 
-        # 메시지 개수 차이 계산
         diff = new_count - old_count if old_count > 0 else new_count
 
-        # 증가가 임계값 미만 → 작은 변경 → 무시
         if 0 <= diff < threshold:
             if diff > 0:
-                print(f"ℹ️  [{date_str}] 메시지 +{diff}개 (< {threshold}개) → 요약 유지")
+                print(f"ℹ️  [{date_str}] 메시지 +{diff}개 (< {threshold}개) → 분석 유지")
             return False
 
-        # 증가가 임계값 이상 → 무효화
-        if diff >= threshold and (self.has_summary(room_name, date_str) or self.has_detail_summary(room_name, date_str)):
-            if self.has_summary(room_name, date_str):
-                self.delete_daily_summary(room_name, date_str)
-            if self.has_detail_summary(room_name, date_str):
-                self.delete_detail_summary(room_name, date_str)
-            print(f"🔄 [{date_str}] 메시지 +{diff}개 (≥ {threshold}개) → 요약 무효화")
+        if diff >= threshold and self.has_detail_summary(room_name, date_str):
+            self.delete_detail_summary(room_name, date_str)
+            print(f"🔄 [{date_str}] 메시지 +{diff}개 (≥ {threshold}개) → 상세 분석 무효화")
             return True
 
-        # 감소 → 경고만, 요약 유지
         if diff < 0:
-            print(f"⚠️  [{date_str}] 메시지 {diff}개 (데이터 감소) → 요약 유지")
+            print(f"⚠️  [{date_str}] 메시지 {diff}개 (데이터 감소) → 분석 유지")
             return False
 
         return False
@@ -458,24 +423,18 @@ class FileStorage:
     # Legacy: 파일 크기 기반 (하위 호환용, deprecated)
     def invalidate_summary_if_file_changed(self, room_name: str, date_str: str,
                                             old_size: int, new_size: int) -> bool:
-        """[Deprecated] 메시지 해시 기반인 invalidate_summary_if_content_changed() 사용 권장."""
-        if old_size != new_size and (self.has_summary(room_name, date_str) or self.has_detail_summary(room_name, date_str)):
-            if self.has_summary(room_name, date_str):
-                self.delete_daily_summary(room_name, date_str)
-            if self.has_detail_summary(room_name, date_str):
-                self.delete_detail_summary(room_name, date_str)
+        """[Deprecated] invalidate_summary_if_content_changed() 사용 권장."""
+        if old_size != new_size and self.has_detail_summary(room_name, date_str):
+            self.delete_detail_summary(room_name, date_str)
             return True
         return False
-    
+
     # Legacy: 메시지 수 기반 (하위 호환용, deprecated)
-    def invalidate_summary_if_updated(self, room_name: str, date_str: str, 
+    def invalidate_summary_if_updated(self, room_name: str, date_str: str,
                                        old_count: int, new_count: int) -> bool:
-        """[Deprecated] 파일 크기 기반인 invalidate_summary_if_file_changed() 사용 권장."""
-        if new_count > old_count and (self.has_summary(room_name, date_str) or self.has_detail_summary(room_name, date_str)):
-            if self.has_summary(room_name, date_str):
-                self.delete_daily_summary(room_name, date_str)
-            if self.has_detail_summary(room_name, date_str):
-                self.delete_detail_summary(room_name, date_str)
+        """[Deprecated] invalidate_summary_if_content_changed() 사용 권장."""
+        if new_count > old_count and self.has_detail_summary(room_name, date_str):
+            self.delete_detail_summary(room_name, date_str)
             return True
         return False
     

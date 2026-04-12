@@ -226,6 +226,63 @@ def extract_urls_from_text(text: str, section_only: bool = False) -> Dict[str, L
     return dict(url_descriptions)
 
 
+def extract_urls_from_html(html_text: str) -> Dict[str, List[str]]:
+    """
+    상세 분석 HTML에서 URL과 설명을 추출합니다 (v2.9.0).
+
+    상세 분석 HTML의 구조:
+    - <div class="url-card"> 블록 내 <a href="..."> 태그에서 URL 추출
+    - <h3> 태그에서 제목 추출
+    - <li> 태그에서 내용/시사점/활용 추출
+    - 토픽 근거의 <a href="...">🔗</a> 태그에서도 URL 추출
+
+    Args:
+        html_text: 상세 분석 HTML 텍스트
+
+    Returns:
+        {URL: [설명 목록]} 딕셔너리
+    """
+    url_descriptions: Dict[str, List[str]] = defaultdict(list)
+
+    # 1) url-card 블록에서 URL + 설명 추출
+    card_pattern = re.compile(
+        r'<div\s+class="url-card">(.*?)</div>',
+        re.DOTALL
+    )
+    for card_match in card_pattern.finditer(html_text):
+        card_html = card_match.group(1)
+
+        # URL 추출 (첫 번째 <a href="...">)
+        href_match = re.search(r'<a\s+href="(https?://[^"]+)"', card_html)
+        if not href_match:
+            continue
+        url = normalize_url(href_match.group(1))
+        if not url or len(url) < 10:
+            continue
+
+        # 제목 추출 (<h3>...</h3>)
+        h3_match = re.search(r'<h3>(.*?)</h3>', card_html, re.DOTALL)
+        if h3_match:
+            title = re.sub(r'<[^>]+>', '', h3_match.group(1)).strip()
+            if title and title not in url_descriptions[url]:
+                url_descriptions[url].append(title)
+
+        # 내용/시사점/활용 추출 (<li>...</li>)
+        for li_match in re.finditer(r'<li>(.*?)</li>', card_html, re.DOTALL):
+            li_text = re.sub(r'<[^>]+>', '', li_match.group(1)).strip()
+            if li_text and li_text not in url_descriptions[url]:
+                url_descriptions[url].append(li_text)
+
+    # 2) 토픽 근거의 인라인 URL 추출 (<a href="...">🔗</a>)
+    inline_pattern = re.compile(r'<a\s+href="(https?://[^"]+)"[^>]*>🔗</a>')
+    for inline_match in inline_pattern.finditer(html_text):
+        url = normalize_url(inline_match.group(1))
+        if url and len(url) >= 10 and url not in url_descriptions:
+            url_descriptions[url] = []
+
+    return dict(url_descriptions)
+
+
 def save_urls_to_file(url_dict: Dict[str, List[str]], output_path: str, chatroom_name: str = "Unknown") -> None:
     """
     추출된 URL 목록을 파일로 저장합니다.

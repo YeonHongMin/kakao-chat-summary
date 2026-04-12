@@ -98,6 +98,16 @@
 
 ## 4. 버전 히스토리
 
+### v2.9.0 (2026-04-13)
+- **BREAKING: 기본 요약 제거, 상세 분석 전용화**
+- 제거: `llm_client.py`, `chat_processor.py`, `src/manual/` CLI, `SyncWorker`, 기본 요약 Workers/Dialogs, `PROMPT_TEMPLATE`
+- 상세 분석 옵션 다이얼로그 추가 (Ctrl+G): pending/오늘/어제~오늘/전체 범위 선택
+- `file_storage.py`: `get_summarized_dates()`/`get_dates_needing_summary()` → `detail_summary/` 기준
+- `url_extractor.py`: `extract_urls_from_html()` 추가 (HTML 파싱)
+- URL 동기화: 마크다운 → HTML 파싱 전환
+- 전체 채팅방 상세 분석: DB + 파일 저장소 채팅방 통합, `get_available_dates()` 기준
+- 대시보드 방 선택 속도 개선 (파일 I/O 제거)
+
 ### v2.5.1 (2026-02-26)
 - **요약 무효화 정확도 개선**: 파일 크기 비교 → 메시지 내용 MD5 해시 비교로 변경
 - `get_original_content_hash()`: 헤더/푸터 제외, 메시지 본문만 해시

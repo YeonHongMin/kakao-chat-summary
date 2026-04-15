@@ -249,17 +249,23 @@ def clean_foreign_chars(content: str) -> str:
     content = hanja.translate(content, 'substitution')
     # 2) 일본어 히라가나(\u3040-\u309f), 가타카나(\u30a0-\u30ff) 제거
     content = re.sub(r'[\u3040-\u309f\u30a0-\u30ff]+', '', content)
+    # 3) 마크다운 헤더 폴백 처리 (LLM이 <h2> 대신 ## 을 썼을 경우)
+    content = re.sub(r'(?m)^##\s+(.+?)$', r'<h2>\1</h2>', content)
+    content = re.sub(r'(?m)^###\s+(.+?)$', r'<h3>\1</h3>', content)
+    # 또한 볼드체(**텍스트**) 변환
+    content = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', content)
     return content
 
 
 def validate_detail_response(content: str) -> Dict[str, Any]:
     """상세 분석 응답 검증."""
-    if len(content) < 200:
+    if len(content) < 100:
         return {"valid": False, "reason": f"응답이 너무 짧습니다 ({len(content)}자)"}
+    
+    # <h2> 태그가 존재하는지 갯수 무관하게 체크 (데이터가 적은 날도 허용)
     if "<h2>" not in content:
         return {"valid": False, "reason": "토픽 섹션(h2)이 없습니다"}
-    if content.count("<h2>") < 2:
-        return {"valid": False, "reason": "토픽이 2개 미만입니다"}
+        
     return {"valid": True, "reason": ""}
 
 
@@ -351,7 +357,7 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                 provider_info.api_url,
                 headers=headers,
                 json=payload,
-                timeout=(60, 600)
+                timeout=(60, config.api_timeout)
             )
 
             elapsed = time.time() - request_start
@@ -416,12 +422,22 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                 # finish_reason 체크
                 finish_reason = choice.get("finish_reason", "unknown")
                 if finish_reason == "length":
-                    return {"success": False, "error": "응답이 잘렸습니다 (max_tokens 초과)"}
+                    logger.warning(
+                        f"[Detail/{provider_info.name}] ⚠️ 응답 잘림 ({elapsed:.0f}초): max_tokens 초과. 잘린 결괏값을 유지합니다."
+                    )
+                    logger.info(
+                        f"[Detail/{provider_info.name}] ⚠️ 경고 ({elapsed:.0f}초): 응답이 너무 길어 중간에 잘렸습니다."
+                    )
+                    content += '\n<blockquote><p style="color: #ff7b72;"><strong>⚠️ 경고:</strong> 대화량이 방대하여 AI의 최대 출력 길이를 초과했습니다. 마지막 부분이 잘렸습니다.</p></blockquote>'
 
                 # 검증
                 validation = validate_detail_response(content)
                 if not validation["valid"]:
                     logger.warning(f"[Detail/{provider_info.name}] ⚠️ 응답 검증 실패 ({elapsed:.0f}초): {validation['reason']}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                        continue
                     logger.info(
                         f"[Detail/{provider_info.name}] ❌ 실패 ({elapsed:.0f}초): {validation['reason']}"
                     )

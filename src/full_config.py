@@ -109,7 +109,7 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
 class Config:
     """애플리케이션 설정을 관리하는 싱글톤 클래스."""
 
-    DEFAULT_TIMEOUT = 600
+    DEFAULT_TIMEOUT = 1200
     DEFAULT_PROVIDER = "glm"
 
     def __init__(self):

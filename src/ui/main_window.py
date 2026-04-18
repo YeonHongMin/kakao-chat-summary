@@ -2042,19 +2042,34 @@ class MainWindow(QMainWindow):
     def _setup_statusbar(self):
         """상태바 구성."""
         self.statusbar = QStatusBar()
+        self.statusbar.setFixedHeight(32)
         self.setStatusBar(self.statusbar)
-        
+
+        # 상태바 레이아웃
+        statusbar_layout = QHBoxLayout()
+        statusbar_layout.setContentsMargins(5, 2, 5, 2)
+        statusbar_layout.setSpacing(10)
+
         # 작업 상태 (왼쪽)
         self.task_status = QLabel("✅ 준비")
         self.task_status.setStyleSheet("font-size: 12px; padding: 0 10px;")
-        self.statusbar.addWidget(self.task_status)
-        
-        self.statusbar.addPermanentWidget(QLabel(""))  # 스페이서
-        
+        self.task_status.setMinimumWidth(100)
+        statusbar_layout.addWidget(self.task_status)
+
+        # 스트레치 (중앙)
+        statusbar_layout.addStretch()
+
         # 마지막 작업 시간
         self.last_sync_label = QLabel("")
         self.last_sync_label.setStyleSheet("color: #666; font-size: 11px;")
-        self.statusbar.addPermanentWidget(self.last_sync_label)
+        self.last_sync_label.setMinimumWidth(80)
+        self.last_sync_label.setAlignment(Qt.AlignRight)
+        statusbar_layout.addWidget(self.last_sync_label)
+
+        # 상태바에 컨테이너 위젯 추가
+        self._statusbar_container = QWidget()
+        self._statusbar_container.setLayout(statusbar_layout)
+        self.statusbar.addWidget(self._statusbar_container, 1)
     
     def _load_rooms(self):
         """채팅방 목록 로드."""
@@ -2311,7 +2326,7 @@ class MainWindow(QMainWindow):
         room_list = "\n".join(f"  • {r.name}" for r in rooms)
         reply = QMessageBox.question(
             self, "전체 채팅방 URL 동기화",
-            f"다음 {len(all_room_names)}개 채팅방의 요약에서 URL을 추출합니다:\n\n"
+            f"다음 {len(rooms)}개 채팅방의 요약에서 URL을 추출합니다:\n\n"
             f"{room_list}\n\n계속하시겠습니까?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes
@@ -2326,7 +2341,15 @@ class MainWindow(QMainWindow):
         self.summary_progress_widget = SummaryProgressWidget(
             self, llm_name="URL", room_name="전체 채팅방"
         )
-        self.statusbar.insertPermanentWidget(0, self.summary_progress_widget)
+        self.summary_progress_widget.setMinimumHeight(28)
+        self.summary_progress_widget.setMaximumHeight(28)
+
+        # 기존 상태바 컨테이너 임시 제거
+        if hasattr(self, '_statusbar_container'):
+            self.statusbar.removeWidget(self._statusbar_container)
+
+        # 프로그레스 위젯을 상태바에 직접 추가
+        self.statusbar.addWidget(self.summary_progress_widget, 1)
         self.summary_progress_widget.show()
 
         self._update_status("⏳ 전체 채팅방 URL 동기화 중...", "working")
@@ -2356,6 +2379,10 @@ class MainWindow(QMainWindow):
             self.statusbar.removeWidget(self.summary_progress_widget)
             self.summary_progress_widget.deleteLater()
             self.summary_progress_widget = None
+
+        # 기존 상태바 컨테이너 복원
+        if hasattr(self, '_statusbar_container'):
+            self.statusbar.addWidget(self._statusbar_container, 1)
 
         if success:
             self._update_status("전체 채팅방 URL 동기화 완료", "success")
@@ -3774,83 +3801,139 @@ class MainWindow(QMainWindow):
             return
 
         room_name = room.name
-        self._update_status("URL 동기화 중...", "working")
 
-        # 날짜 기준
-        today = date.today()
-        three_days_ago = today - timedelta(days=3)
-        one_week_ago = today - timedelta(days=7)
+        # UI 프로그레스 위젯 표시
+        self.summary_progress_widget = SummaryProgressWidget(
+            self, llm_name="URL", room_name=room_name
+        )
+        self.summary_progress_widget.setMinimumHeight(28)
+        self.summary_progress_widget.setMaximumHeight(28)
 
-        # 날짜별 URL 추출 (상세 분석 HTML에서)
-        urls_by_date = {}
-        detail_dates = self.storage.get_summarized_dates(room_name)
+        # 기존 상태바 컨테이너 임시 제거
+        if hasattr(self, '_statusbar_container'):
+            self.statusbar.removeWidget(self._statusbar_container)
 
-        for date_str in sorted(detail_dates):
-            detail_html = self.storage.load_detail_summary(room_name, date_str)
-            if detail_html:
-                urls = extract_urls_from_html(detail_html)
-                if urls:
-                    urls_by_date[date_str] = urls
+        # 프로그레스 위젯을 상태바에 직접 추가
+        self.statusbar.addWidget(self.summary_progress_widget, 1)
+        self.summary_progress_widget.show()
         
-        # 기간별 URL 분류
-        def extract_urls_for_period(start_date: date) -> dict:
-            period_urls = {}
+        self._url_sync_cancelled = False
+        def cancel_sync():
+            self._url_sync_cancelled = True
+        self.summary_progress_widget.cancel_requested.connect(cancel_sync)
+        
+        self.sync_url_btn.setEnabled(False)
+        self._update_status("URL 동기화 준비 중...", "working")
+        QApplication.processEvents()
+
+        try:
+            # 날짜 기준
+            today = date.today()
+            three_days_ago = today - timedelta(days=3)
+            one_week_ago = today - timedelta(days=7)
+    
+            # 날짜별 URL 추출 (상세 분석 HTML에서)
+            urls_by_date = {}
+            detail_dates = self.storage.get_summarized_dates(room_name)
+            total_dates = len(detail_dates)
+    
+            for i, date_str in enumerate(sorted(detail_dates)):
+                if self._url_sync_cancelled:
+                    self._update_status("URL 동기화 취소됨", "info")
+                    QMessageBox.information(self, "알림", "URL 동기화가 취소되었습니다.")
+                    return
+                pct = int((i / max(1, total_dates)) * 80)
+                self.summary_progress_widget.update_progress(pct, f"{date_str} URL 추출 중... ({i+1}/{total_dates})")
+                QApplication.processEvents()
+                
+                detail_html = self.storage.load_detail_summary(room_name, date_str)
+                if detail_html:
+                    urls = extract_urls_from_html(detail_html)
+                    if urls:
+                        urls_by_date[date_str] = urls
+            
+            if self._url_sync_cancelled:
+                return
+                
+            self.summary_progress_widget.update_progress(85, "URL 분류 및 중복 제거 중...")
+            QApplication.processEvents()
+            
+            # 기간별 URL 분류
+            def extract_urls_for_period(start_date: date) -> dict:
+                period_urls = {}
+                for date_str, urls in urls_by_date.items():
+                    try:
+                        d = date.fromisoformat(date_str)
+                        if d >= start_date:
+                            for url, descriptions in urls.items():
+                                if url not in period_urls:
+                                    period_urls[url] = []
+                                for desc in descriptions:
+                                    if desc and desc not in period_urls[url]:
+                                        period_urls[url].append(desc)
+                    except:
+                        pass
+                return period_urls
+            
+            # 3개 기간별 URL
+            urls_recent = deduplicate_urls(extract_urls_for_period(three_days_ago))
+            urls_weekly = deduplicate_urls(extract_urls_for_period(one_week_ago))
+            urls_all = {}
             for date_str, urls in urls_by_date.items():
-                try:
-                    d = date.fromisoformat(date_str)
-                    if d >= start_date:
-                        for url, descriptions in urls.items():
-                            if url not in period_urls:
-                                period_urls[url] = []
-                            for desc in descriptions:
-                                if desc and desc not in period_urls[url]:
-                                    period_urls[url].append(desc)
-                except:
-                    pass
-            return period_urls
-        
-        # 3개 기간별 URL
-        urls_recent = deduplicate_urls(extract_urls_for_period(three_days_ago))
-        urls_weekly = deduplicate_urls(extract_urls_for_period(one_week_ago))
-        urls_all = {}
-        for date_str, urls in urls_by_date.items():
-            for url, descriptions in urls.items():
-                if url not in urls_all:
-                    urls_all[url] = []
-                for desc in descriptions:
-                    if desc and desc not in urls_all[url]:
-                        urls_all[url].append(desc)
-        
-        # 최종 중복 제거 및 정렬
-        urls_all = deduplicate_urls(urls_all)
-        
-        if urls_all:
-            # DB에 저장 (기존 삭제 후 새로 추가)
-            self.db.clear_urls_by_room(self.current_room_id)
-            self.db.add_urls_batch(self.current_room_id, urls_all)
+                for url, descriptions in urls.items():
+                    if url not in urls_all:
+                        urls_all[url] = []
+                    for desc in descriptions:
+                        if desc and desc not in urls_all[url]:
+                            urls_all[url].append(desc)
             
-            # 파일에 3개로 저장
-            paths = self.storage.save_url_lists(room_name, urls_recent, urls_weekly, urls_all)
+            # 최종 중복 제거 및 정렬
+            urls_all = deduplicate_urls(urls_all)
             
-            # 3개 섹션과 함께 표시
-            self._display_url_list(urls_all, "동기화됨", urls_recent, urls_weekly)
-            self.url_status_label.setText("(동기화됨)")
-            self._update_status(f"URL 동기화 완료 ({len(urls_all)}개)", "success")
+            if self._url_sync_cancelled:
+                return
+                
+            self.summary_progress_widget.update_progress(95, "DB 및 파일에 저장 중...")
+            QApplication.processEvents()
             
-            QMessageBox.information(
-                self, "동기화 완료",
-                f"✅ URL이 동기화되었습니다.\n\n"
-                f"- DB에 저장됨\n"
-                f"- 파일 저장:\n"
-                f"  📁 {room_name}_urls_recent.md ({len(urls_recent)}개)\n"
-                f"  📁 {room_name}_urls_weekly.md ({len(urls_weekly)}개)\n"
-                f"  📁 {room_name}_urls_all.md ({len(urls_all)}개)"
-            )
-        else:
-            self._display_url_list({}, "")
-            self.url_status_label.setText("(URL 없음)")
-            self._update_status("동기화할 URL 없음", "info")
-            QMessageBox.information(self, "알림", "요약에서 추출된 URL이 없습니다.")
+            if urls_all:
+                # DB에 저장 (기존 삭제 후 새로 추가)
+                self.db.clear_urls_by_room(self.current_room_id)
+                self.db.add_urls_batch(self.current_room_id, urls_all)
+                
+                # 파일에 3개로 저장
+                paths = self.storage.save_url_lists(room_name, urls_recent, urls_weekly, urls_all)
+                
+                # 3개 섹션과 함께 표시
+                self._display_url_list(urls_all, "동기화됨", urls_recent, urls_weekly)
+                self.url_status_label.setText("(동기화됨)")
+                self._update_status(f"URL 동기화 완료 ({len(urls_all)}개)", "success")
+                
+                QMessageBox.information(
+                    self, "동기화 완료",
+                    f"✅ URL이 동기화되었습니다.\n\n"
+                    f"- DB에 저장됨\n"
+                    f"- 파일 저장:\n"
+                    f"  📁 {room_name}_urls_recent.md ({len(urls_recent)}개)\n"
+                    f"  📁 {room_name}_urls_weekly.md ({len(urls_weekly)}개)\n"
+                    f"  📁 {room_name}_urls_all.md ({len(urls_all)}개)"
+                )
+            else:
+                self._display_url_list({}, "")
+                self.url_status_label.setText("(URL 없음)")
+                self._update_status("동기화할 URL 없음", "info")
+                QMessageBox.information(self, "알림", "요약에서 추출된 URL이 없습니다.")
+                
+        finally:
+            self.sync_url_btn.setEnabled(True)
+            if self.summary_progress_widget:
+                self.statusbar.removeWidget(self.summary_progress_widget)
+                self.summary_progress_widget.deleteLater()
+                self.summary_progress_widget = None
+
+            # 기존 상태바 컨테이너 복원
+            if hasattr(self, '_statusbar_container'):
+                self.statusbar.addWidget(self._statusbar_container, 1)
     
     @Slot()
     def _restore_url_from_file(self):

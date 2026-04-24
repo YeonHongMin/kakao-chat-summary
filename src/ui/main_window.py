@@ -294,6 +294,12 @@ class ChatRoomWidget(QFrame):
         
         layout.addLayout(info_layout, 1)
     
+    def setSelected(self, selected: bool):
+        """선택 상태에 따라 배경색 변경 (QSS property 기반)."""
+        self.setProperty("selected", "true" if selected else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
     def mousePressEvent(self, event):
         self.clicked.emit(self.room_id, self.file_path)
         super().mousePressEvent(event)
@@ -2135,9 +2141,19 @@ class MainWindow(QMainWindow):
         else:
             self._room_cache.pop(room_id, None)
 
+    def _highlight_selected_room(self, room_id: int):
+        """채팅방 목록에서 선택된 방만 하이라이트."""
+        for i in range(self.room_list_layout.count()):
+            item = self.room_list_layout.itemAt(i)
+            if item and item.widget() and isinstance(item.widget(), ChatRoomWidget):
+                item.widget().setSelected(item.widget().room_id == room_id)
+
     @Slot(int, str)
     def _on_room_selected(self, room_id: int, file_path: str):
         """채팅방 선택 시."""
+        # 선택 상태 UI 업데이트 (항상 실행 — 캐시와 무관)
+        self._highlight_selected_room(room_id)
+
         # 같은 방을 다시 클릭했고 캐시가 유효하면 I/O 스킵
         if (self.current_room_id == room_id
                 and room_id in self._room_cache

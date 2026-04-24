@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QDateEdit, QCalendarWidget, QSystemTrayIcon, QStyle
 )
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QThread, QDate
-from PySide6.QtGui import QAction, QFont, QIcon
+from PySide6.QtGui import QAction, QFont, QIcon, QPalette, QColor
 
 from .styles import MAIN_STYLESHEET
 
@@ -28,6 +28,15 @@ from file_storage import get_storage
 from url_extractor import extract_urls_from_text, extract_urls_from_html, save_urls_to_file, deduplicate_urls
 
 logger = logging.getLogger("KakaoSummarizer")
+
+
+def _apply_text_browser_selection_palette(browser: QTextBrowser) -> None:
+    """드래그 선택 시 시스템 파란색·링크 색이 겹쳐 글자가 사라지는 현상 방지."""
+    pal = browser.palette()
+    for grp in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive):
+        pal.setColor(grp, QPalette.ColorRole.Highlight, QColor("#FEE500"))
+        pal.setColor(grp, QPalette.ColorRole.HighlightedText, QColor("#191919"))
+    browser.setPalette(pal)
 
 
 class MessageParser:
@@ -1281,6 +1290,9 @@ class MainWindow(QMainWindow):
         self.detail_batch_worker: Optional[DetailBatchWorker] = None
         self.all_rooms_detail_worker: Optional[AllRoomsDetailWorker] = None
         
+        # 채팅방 데이터 캐시 — 같은 방 재클릭 시 I/O 스킵
+        self._room_cache: dict = {}  # {room_id: {"stats": ..., "loaded": True}}
+        
         self._setup_ui()
         self._setup_menu()
         self._setup_statusbar()
@@ -1468,8 +1480,11 @@ class MainWindow(QMainWindow):
                 border: none;
                 background-color: transparent;
                 font-size: 16px;
+                selection-background-color: #FEE500;
+                selection-color: #191919;
             }
         """)
+        _apply_text_browser_selection_palette(self.summary_browser)
         self.summary_browser.setPlaceholderText("채팅방을 선택하면 요약이 표시됩니다.")
         summary_layout.addWidget(self.summary_browser)
         
@@ -1692,8 +1707,11 @@ class MainWindow(QMainWindow):
                 background-color: transparent;
                 font-size: 14px;
                 line-height: 1.6;
+                selection-background-color: #FEE500;
+                selection-color: #191919;
             }
         """)
+        _apply_text_browser_selection_palette(self.detail_browser)
         self.detail_browser.setPlaceholderText("채팅방과 날짜를 선택하면 상세 요약이 표시됩니다.")
         detail_frame_layout.addWidget(self.detail_browser)
         
@@ -1791,8 +1809,11 @@ class MainWindow(QMainWindow):
                 background-color: transparent;
                 font-size: 13px;
                 line-height: 1.8;
+                selection-background-color: #FEE500;
+                selection-color: #191919;
             }
         """)
+        _apply_text_browser_selection_palette(self.url_browser)
         self.url_browser.setPlaceholderText("채팅방을 선택하면 공유된 URL 목록이 표시됩니다.")
         url_frame_layout.addWidget(self.url_browser)
         
@@ -2107,13 +2128,25 @@ class MainWindow(QMainWindow):
                 self.room_list_layout.count() - 1, widget
             )
     
+    def _invalidate_room_cache(self, room_id: Optional[int] = None):
+        """채팅방 캐시 무효화. room_id=None이면 전체 캐시 초기화."""
+        if room_id is None:
+            self._room_cache.clear()
+        else:
+            self._room_cache.pop(room_id, None)
+
     @Slot(int, str)
     def _on_room_selected(self, room_id: int, file_path: str):
         """채팅방 선택 시."""
+        # 같은 방을 다시 클릭했고 캐시가 유효하면 I/O 스킵
+        if (self.current_room_id == room_id
+                and room_id in self._room_cache
+                and self._room_cache[room_id].get("loaded")):
+            return
+
         self.current_room_id = room_id
         self.current_room_file = file_path
 
-        
         # 채팅방 통계 로드
         stats = self.db.get_room_stats(room_id)
         room_name = "채팅방"
@@ -2166,6 +2199,9 @@ class MainWindow(QMainWindow):
         # URL 탭 자동 로드
         self._current_url_data = {}
         self._refresh_url_list()
+
+        # 캐시에 등록 — 다음 동일 방 클릭 시 스킵
+        self._room_cache[room_id] = {"loaded": True}
     
     @Slot()
     def _on_add_room(self):
@@ -2194,6 +2230,7 @@ class MainWindow(QMainWindow):
             (storage.original_dir / storage._sanitize_name(room_name)).mkdir(parents=True, exist_ok=True)
             
             QMessageBox.information(self, "생성 완료", f"✅ '{room_name}' 채팅방이 생성되었습니다.\n\n이제 파일을 업로드하세요.")
+            self._invalidate_room_cache()
             self._load_rooms()
             
         except Exception as e:
@@ -2229,6 +2266,7 @@ class MainWindow(QMainWindow):
             self.current_room_file = None
             self.header_label.setText("📊 대시보드")
             self.summary_browser.setHtml("<p style='color: #888;'>채팅방을 선택하세요.</p>")
+            self._invalidate_room_cache()
             self._load_rooms()
             self._update_status(f"'{room_name}' 채팅방 삭제 완료", "success")
         except Exception as e:
@@ -2279,6 +2317,7 @@ class MainWindow(QMainWindow):
         if success:
             self._update_status("업로드 완료", "success")
             QMessageBox.information(self, "업로드 완료", message)
+            self._invalidate_room_cache()
             self._load_rooms()
             
             # 새로 추가된 채팅방 선택
@@ -2540,6 +2579,8 @@ class MainWindow(QMainWindow):
 
         if success:
             self._update_status("✅ 전체 채팅방 상세 분석 완료", "success")
+            # 전체 캐시 무효화 (여러 채팅방이 변경됨)
+            self._invalidate_room_cache()
             if self.current_room_id:
                 self._on_room_selected(self.current_room_id, self.current_room_file or "")
             QMessageBox.information(self, "전체 채팅방 상세 분석 완료", result)
@@ -2586,6 +2627,7 @@ class MainWindow(QMainWindow):
             # DB 재연결 및 UI 새로고침
             from db import get_db
             self.db = get_db(force_new=True)
+            self._invalidate_room_cache()
             self._load_rooms()
         else:
             self._update_status("DB 복구 실패", "error")
@@ -2636,6 +2678,7 @@ class MainWindow(QMainWindow):
                 pass
 
         self._update_status(f"채팅방 {created}개 복구 완료", "success")
+        self._invalidate_room_cache()
         self._load_rooms()
         QMessageBox.information(
             self, "채팅방 복구 완료",
@@ -2691,6 +2734,7 @@ class MainWindow(QMainWindow):
     def _on_refresh_stats(self):
         """통계 정보 갱신."""
         self._update_status("통계 갱신 중...", "working")
+        self._invalidate_room_cache()
         self._load_rooms()
         if self.current_room_id:
             self._on_room_selected(self.current_room_id, self.current_room_file)
@@ -2884,6 +2928,7 @@ class MainWindow(QMainWindow):
 
         if success:
             self._update_status(f"'{selected_room}' 복원 완료", "success")
+            self._invalidate_room_cache()
             self._load_rooms()
             QMessageBox.information(
                 self, "복원 완료",
@@ -3397,6 +3442,8 @@ class MainWindow(QMainWindow):
 
         if success:
             self._update_status("✅ 상세 분석 완료", "success")
+            # 캐시 무효화 → 날짜 탭/URL 갱신
+            self._invalidate_room_cache(self.current_room_id)
             self._on_date_changed(self.date_edit.date())
         else:
             self._update_status(f"❌ {result}", "error")
@@ -3563,7 +3610,8 @@ class MainWindow(QMainWindow):
 
         if success:
             self._update_status(f"✅ {result}", "success")
-            # 현재 보고 있는 채팅방이면 뷰 갱신
+            # 캐시 무효화 후 뷰 갱신
+            self._invalidate_room_cache(self.current_room_id)
             if self.current_room_id:
                 self._on_room_selected(
                     self.current_room_id, self.current_room_file or ""

@@ -130,6 +130,14 @@ QMainWindow {
     background-color: transparent;
     font-size: 13px;
     line-height: 1.6;
+    selection-background-color: #FEE500;
+    selection-color: #191919;
+}
+
+/* 상세/URL 뷰 등 QTextBrowser 공통: 파란 선택과 링크 색 충돌 방지 */
+QTextBrowser {
+    selection-background-color: #FEE500;
+    selection-color: #191919;
 }
 
 /* 버튼 스타일 */

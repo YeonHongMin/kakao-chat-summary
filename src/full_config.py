@@ -110,10 +110,19 @@ class Config:
     """애플리케이션 설정을 관리하는 싱글톤 클래스."""
 
     DEFAULT_TIMEOUT = 1200
-    DEFAULT_PROVIDER = "glm"
+    DEFAULT_PROVIDER = "minimax"
 
     def __init__(self):
-        self.current_provider: str = os.getenv("LLM_PROVIDER", self.DEFAULT_PROVIDER)
+        # LLM_PROVIDER가 파일에만 있고 값이 비어 있으면 getenv가 ""를 주어
+        # 기본값 대신 빈 문자열이 되고, UI 콤보가 첫 항목(glm)으로 떨어지는 문제 방지
+        _raw = os.getenv("LLM_PROVIDER")
+        if _raw is None:
+            self.current_provider = self.DEFAULT_PROVIDER
+        else:
+            cand = str(_raw).strip()
+            self.current_provider = (
+                cand if cand in LLM_PROVIDERS else self.DEFAULT_PROVIDER
+            )
         self.api_timeout: int = int(os.getenv("API_TIMEOUT", self.DEFAULT_TIMEOUT))
         self.base_dir: Path = CURRENT_DIR.parent
         self.data_dir: Path = self.base_dir / 'data'

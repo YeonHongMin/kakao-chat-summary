@@ -1,6 +1,6 @@
 # 💬 카카오톡 대화 분석기 (KakaoTalk Chat Summarizer)
 
-> **v2.9.3** | 최종 업데이트: 2026-04-24
+> **v2.9.4** | 최종 업데이트: 2026-05-04
 
 카카오톡 대화 내보내기 파일을 AI(LLM)를 활용하여 날짜별로 **상세 분석 HTML**을 생성하는 **데스크톱 GUI 애플리케이션**입니다.
 
@@ -220,6 +220,14 @@ logs/summarizer_20260201.log
 ---
 
 ## 📝 변경 이력
+
+### v2.9.4 (2026-05-04) - 기본 LLM MiniMax 및 설정·LLM UI 정비
+- **기본 LLM**: 앱 기본 제공자를 MiniMax(`MiniMax-M2.7`)로 설정 (`full_config.Config.DEFAULT_PROVIDER`, 상세 분석 API 기본 인자, 워커 기본값)
+- **`LLM_PROVIDER` 처리**: `.env`에서 빈 값·미지원 값이면 기본 제공자로 정규화 (콤보박스가 첫 항목 Z.AI GLM으로 떨어지던 현상 방지)
+- **상세 분석 LLM 선택**: 전체/단일/일괄·Ctrl+G 옵션에서 현재 provider가 목록에 없을 때 `DEFAULT_PROVIDER`로 폴백
+- **설정 창 LLM**: 하드코딩 목록 제거 → `LLM_PROVIDERS`와 동일 목록 표시, 확인 시 `config.set_provider()`로 세션 내 반영
+- **`env.local.example`**: 기본 LLM 안내 및 예시 `LLM_PROVIDER=minimax` 주석 정리
+- **버전 표시 통일**: `QApplication` 버전·도움말 정보를 v2.9.4로 통일
 
 ### v2.9.3 (2026-04-24) - 채팅방 선택 캐시 최적화 및 UX 개선
 - 🚀 **채팅방 데이터 캐시**: 같은 채팅방 재클릭 시 DB 쿼리 + 파일 I/O를 스킵하여 즉시 응답

@@ -566,7 +566,7 @@ class DetailSummaryWorker(QThread):
     finished = Signal(bool, str)  # (success, result_html_or_error)
 
     def __init__(self, room_id: int, room_name: str, date_str: str,
-                 llm_provider: str = "glm"):
+                 llm_provider: str = "minimax"):
         super().__init__()
         self.room_id = room_id
         self.room_name = room_name
@@ -642,7 +642,7 @@ class DetailBatchWorker(QThread):
     finished = Signal(bool, str)  # (success, result_message)
 
     def __init__(self, room_id: int, room_name: str, dates: list,
-                 llm_provider: str = "glm"):
+                 llm_provider: str = "minimax"):
         super().__init__()
         self.room_id = room_id
         self.room_name = room_name
@@ -724,7 +724,7 @@ class AllRoomsDetailWorker(QThread):
     progress = Signal(int, str)
     finished = Signal(bool, str)
 
-    def __init__(self, rooms: list, llm_provider: str = "glm"):
+    def __init__(self, rooms: list, llm_provider: str = "minimax"):
         """
         Args:
             rooms: [(room_id, room_name), ...] 리스트
@@ -1251,14 +1251,26 @@ class SettingsDialog(QDialog):
         
         layout.addWidget(sync_group)
         
-        # LLM 설정
+        # LLM 설정 (full_config.LLM_PROVIDERS와 동기화)
         llm_group = QGroupBox("🤖 LLM 설정")
         llm_layout = QFormLayout(llm_group)
-        
+
+        from full_config import config as _cfg, LLM_PROVIDERS as _providers
+
         self.llm_provider = QComboBox()
-        self.llm_provider.addItems(["Z.AI GLM", "OpenAI GPT", "Anthropic Claude", "Google Gemini"])
+        _pref = (
+            _cfg.current_provider
+            if _cfg.current_provider in _providers
+            else _cfg.DEFAULT_PROVIDER
+        )
+        _sel = 0
+        for _i, (_key, _prov) in enumerate(_providers.items()):
+            self.llm_provider.addItem(f"{_prov.name} ({_prov.model})", _key)
+            if _key == _pref:
+                _sel = _i
+        self.llm_provider.setCurrentIndex(_sel)
         llm_layout.addRow("LLM 제공자:", self.llm_provider)
-        
+
         layout.addWidget(llm_group)
         
         # 버튼
@@ -2531,7 +2543,12 @@ class MainWindow(QMainWindow):
 
         llm_combo = QComboBox()
         llm_combo.addItems(llm_items)
-        current_idx = llm_keys.index(config.current_provider) if config.current_provider in llm_keys else 0
+        pref = (
+            config.current_provider
+            if config.current_provider in llm_keys
+            else config.DEFAULT_PROVIDER
+        )
+        current_idx = llm_keys.index(pref) if pref in llm_keys else 0
         llm_combo.setCurrentIndex(current_idx)
         form = QFormLayout()
         form.addRow("LLM:", llm_combo)
@@ -2761,8 +2778,11 @@ class MainWindow(QMainWindow):
         """설정 다이얼로그."""
         dialog = SettingsDialog(self)
         if dialog.exec() == QDialog.Accepted:
-            # TODO: 설정 저장
-            pass
+            from full_config import config as _cfg
+
+            key = dialog.llm_provider.currentData()
+            if key:
+                _cfg.set_provider(key)
 
     @Slot()
     def _on_room_backup(self):
@@ -3222,13 +3242,18 @@ class MainWindow(QMainWindow):
 
         llm_flags = {"glm": "🇨🇳", "chatgpt": "🇺🇸", "minimax": "🇨🇳", "perplexity": "🇺🇸", "grok": "🇺🇸", "qwen-or": "🇨🇳", "qwen-kilo": "🇨🇳", "ollama": "🖥️"}
         default_key = config.DEFAULT_PROVIDER
+        preferred = (
+            config.current_provider
+            if config.current_provider in LLM_PROVIDERS
+            else default_key
+        )
         current_idx = 0
         for idx, (key, prov) in enumerate(LLM_PROVIDERS.items()):
             suffix = " (기본)" if key == default_key else ""
             flag = llm_flags.get(key, "🌐")
             label = f"{flag} {prov.name}{suffix}" if key in {"qwen-or", "qwen-kilo"} else f"{flag} {prov.name} {prov.model}{suffix}"
             llm_combo.addItem(label, key)
-            if key == config.current_provider:
+            if key == preferred:
                 current_idx = idx
         llm_combo.setCurrentIndex(current_idx)
         llm_layout.addWidget(llm_combo, 1)
@@ -3397,8 +3422,12 @@ class MainWindow(QMainWindow):
 
         llm_combo = QComboBox()
         llm_combo.addItems(llm_items)
-        # 현재 기본 LLM 선택
-        current_idx = llm_keys.index(config.current_provider) if config.current_provider in llm_keys else 0
+        pref = (
+            config.current_provider
+            if config.current_provider in llm_keys
+            else config.DEFAULT_PROVIDER
+        )
+        current_idx = llm_keys.index(pref) if pref in llm_keys else 0
         llm_combo.setCurrentIndex(current_idx)
         form = QFormLayout()
         form.addRow("LLM:", llm_combo)
@@ -3540,7 +3569,12 @@ class MainWindow(QMainWindow):
 
         llm_combo = QComboBox()
         llm_combo.addItems(llm_items)
-        current_idx = llm_keys.index(config.current_provider) if config.current_provider in llm_keys else 0
+        pref = (
+            config.current_provider
+            if config.current_provider in llm_keys
+            else config.DEFAULT_PROVIDER
+        )
+        current_idx = llm_keys.index(pref) if pref in llm_keys else 0
         llm_combo.setCurrentIndex(current_idx)
         form = QFormLayout()
         form.addRow("LLM:", llm_combo)
@@ -4131,7 +4165,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.9.0</p>
+            <p>버전 2.9.4</p>
             <p>카카오톡 대화를 분석하고 AI로 상세 분석하는 도구입니다.</p>
             <p>제작자: 민연홍<br>
             <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>

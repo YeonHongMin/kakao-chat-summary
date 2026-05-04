@@ -286,7 +286,7 @@ def _extract_error_message(data: Dict[str, Any]) -> str:
 
 
 def call_detail_llm(text: str, room_name: str, date_str: str,
-                    provider: str = "glm") -> Dict[str, Any]:
+                    provider: str = "minimax") -> Dict[str, Any]:
     """
     상세 분석을 위한 LLM API 호출.
 

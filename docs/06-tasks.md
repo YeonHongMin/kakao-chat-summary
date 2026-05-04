@@ -98,6 +98,18 @@
 
 ## 4. 버전 히스토리
 
+### v2.9.4 (2026-05-04)
+- **기본 LLM MiniMax**: `DEFAULT_PROVIDER=minimax`, 상세 분석 호출·워커 기본값 정렬
+- **`LLM_PROVIDER` 정규화**: 빈 값/미지원 값 → 기본 제공자 (UI가 GLM으로 고정되던 버그 수정)
+- **LLM 콤보 폴백**: 상세 분석 관련 다이얼로그에서 `DEFAULT_PROVIDER` 사용
+- **설정 창**: `LLM_PROVIDERS` 연동, 확인 시 `set_provider`
+- **문서·버전 표시**: README/CLAUDE 정리, 앱 About·`setApplicationVersion` v2.9.4
+
+### v2.9.3 (2026-04-24)
+- **채팅방 선택 캐시** (`_room_cache`): 동일 방 재선택 시 DB/파일 I/O 스킵
+- **캐시 무효화**: 상세 분석·업로드·복구·통계 갱신 등 이벤트별 전략
+- **채팅방 하이라이트**: 선택 방 카카오 노랑 스타일 유지
+
 ### v2.9.2 (2026-04-18)
 - **URL 동기화 작업 표시줄 UI 개선**
 - 상태바 구조: `QStatusBar.addPermanentWidget()` → HBox 레이아웃 기반 재설계

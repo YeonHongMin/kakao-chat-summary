@@ -428,6 +428,14 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                     logger.info(
                         f"[Detail/{provider_info.name}] ⚠️ 경고 ({elapsed:.0f}초): 응답이 너무 길어 중간에 잘렸습니다."
                     )
+                    # 잘린 시점에 <h2> 앞부분이 없으면 검증만 실패하고 긴 요청이 허사로 재시도됨 → 최소 구조 삽입
+                    _body = content.strip()
+                    if _body and "<h2>" not in _body and len(_body) >= 100:
+                        content = (
+                            '<h2>⚠️ 부분 분석 (출력 길이 한도로 중간에 잘림)</h2>\n'
+                            '<div class="detail-partial-output">\n'
+                            f"{_body}\n</div>"
+                        )
                     content += '\n<blockquote><p style="color: #ff7b72;"><strong>⚠️ 경고:</strong> 대화량이 방대하여 AI의 최대 출력 길이를 초과했습니다. 마지막 부분이 잘렸습니다.</p></blockquote>'
 
                 # 검증

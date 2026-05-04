@@ -64,7 +64,9 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
         name="MiniMax Coding Plan",
         api_url="https://api.minimax.io/v1/chat/completions",
         model="MiniMax-M2.7",
-        env_key="MINIMAX_API_KEY"
+        env_key="MINIMAX_API_KEY",
+        # 상세 HTML이 길어 16k에서 자주 잘림 → 기본 상향. API/요금에 맞게 MINIMAX_MAX_TOKENS로 조절
+        max_tokens=int(os.getenv("MINIMAX_MAX_TOKENS", "32768")),
     ),
     "perplexity": LLMProvider(
         name="Perplexity",

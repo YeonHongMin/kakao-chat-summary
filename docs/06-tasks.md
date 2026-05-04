@@ -98,6 +98,14 @@
 
 ## 4. 버전 히스토리
 
+### v2.9.5 (2026-05-05)
+- MiniMax: 기본 출력 토큰 32768, 잘림 시 h2 보강
+- GLM: 기본 ZAI_MAX_TOKENS 32768
+- 상세 분석 로그: 채팅방·날짜 접두사
+- env.local.example 정비 및 복구
+- QTextBrowser 선택 스타일
+- 변경 요약: `CHANGELOG.md`
+
 ### v2.9.4 (2026-05-04)
 - **기본 LLM MiniMax**: `DEFAULT_PROVIDER=minimax`, 상세 분석 호출·워커 기본값 정렬
 - **`LLM_PROVIDER` 정규화**: 빈 값/미지원 값 → 기본 제공자 (UI가 GLM으로 고정되던 버그 수정)

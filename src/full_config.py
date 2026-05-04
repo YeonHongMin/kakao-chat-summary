@@ -51,7 +51,8 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
         api_url="https://api.z.ai/api/coding/paas/v4/chat/completions",
         model="glm-4.5",
         env_key="ZAI_API_KEY",
-        max_tokens=int(os.getenv("ZAI_MAX_TOKENS", "8192")),
+        # 상세 HTML이 길어 8k에서 잘림 → MiniMax와 동일 기본. ZAI_MAX_TOKENS로 조절
+        max_tokens=int(os.getenv("ZAI_MAX_TOKENS", "32768")),
         max_input_chars=int(os.getenv("ZAI_MAX_INPUT_CHARS", "1500000"))  # 약 1.5MB 문자수(대략 1M 토큰) 제한
     ),
     "chatgpt": LLMProvider(

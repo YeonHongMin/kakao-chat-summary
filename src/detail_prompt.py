@@ -307,18 +307,20 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
     if not api_key and provider_info.env_key:
         return {"success": False, "error": f"API Key가 설정되지 않았습니다: {provider_info.env_key}"}
 
+    _logpfx = f"[{room_name} | {date_str}]"
+
     # ChatGPT Rate Limit
     if provider == "chatgpt":
         elapsed = time.time() - _last_chatgpt_request_time
         if elapsed < _CHATGPT_RATE_LIMIT_DELAY and _last_chatgpt_request_time > 0:
             wait_time = _CHATGPT_RATE_LIMIT_DELAY - elapsed
-            logger.info(f"[Detail/ChatGPT] Rate Limit 대기 {wait_time:.1f}s...")
+            logger.info(f"{_logpfx} [Detail/ChatGPT] Rate Limit 대기 {wait_time:.1f}s...")
             time.sleep(wait_time)
 
     # 입력 컨텍스트 초과 방지: max_input_chars가 설정된 프로바이더는 텍스트 잘라내기
     if provider_info.max_input_chars > 0 and len(text) > provider_info.max_input_chars:
         logger.warning(
-            f"[Detail/{provider_info.name}] 입력 텍스트 {len(text):,}자가 한계({provider_info.max_input_chars:,}자) 초과 — 앞부분만 사용합니다."
+            f"{_logpfx} [Detail/{provider_info.name}] 입력 텍스트 {len(text):,}자가 한계({provider_info.max_input_chars:,}자) 초과 — 앞부분만 사용합니다."
         )
         text = text[:provider_info.max_input_chars]
 
@@ -347,7 +349,7 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
     for attempt in range(max_retries):
         request_start = None
         try:
-            logger.info(f"[Detail/{provider_info.name}] 요청 전송... (시도 {attempt + 1}/{max_retries})")
+            logger.info(f"{_logpfx} [Detail/{provider_info.name}] 요청 전송... (시도 {attempt + 1}/{max_retries})")
             request_start = time.time()
 
             if provider == "chatgpt":
@@ -369,24 +371,24 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                     preview = response.text[:300].replace("\n", " ")
                     error_msg = f"응답 JSON 파싱 실패: {e}"
                     logger.error(
-                        f"[Detail/{provider_info.name}] {error_msg}. body={preview}"
+                        f"{_logpfx} [Detail/{provider_info.name}] {error_msg}. body={preview}"
                     )
                     logger.info(
-                        f"[Detail/{provider_info.name}] ❌ 실패 ({elapsed:.0f}초): 응답 JSON 파싱 실패"
+                        f"{_logpfx} [Detail/{provider_info.name}] ❌ 실패 ({elapsed:.0f}초): 응답 JSON 파싱 실패"
                     )
                     return {"success": False, "error": error_msg}
 
                 error_msg = _extract_error_message(data)
                 if error_msg:
                     logger.warning(
-                        f"[Detail/{provider_info.name}] API 오류 응답 ({elapsed:.0f}초): {error_msg}"
+                        f"{_logpfx} [Detail/{provider_info.name}] API 오류 응답 ({elapsed:.0f}초): {error_msg}"
                     )
                     if attempt < max_retries - 1:
                         time.sleep(retry_delay)
                         retry_delay *= 2
                         continue
                     logger.info(
-                        f"[Detail/{provider_info.name}] ❌ 실패 ({elapsed:.0f}초): {error_msg}"
+                        f"{_logpfx} [Detail/{provider_info.name}] ❌ 실패 ({elapsed:.0f}초): {error_msg}"
                     )
                     return {"success": False, "error": error_msg}
 
@@ -394,20 +396,20 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                 if "base_resp" in data and data["base_resp"].get("status_code") != 0:
                     error_msg = data["base_resp"].get("status_msg", "Unknown error")
                     logger.info(
-                        f"[Detail/{provider_info.name}] ❌ 실패 ({elapsed:.0f}초): {error_msg}"
+                        f"{_logpfx} [Detail/{provider_info.name}] ❌ 실패 ({elapsed:.0f}초): {error_msg}"
                     )
                     return {"success": False, "error": error_msg}
 
                 choices = data.get("choices")
                 if not isinstance(choices, list) or not choices:
                     error_msg = f"예상과 다른 응답 형식: keys={sorted(data.keys())}"
-                    logger.warning(f"[Detail/{provider_info.name}] {error_msg}")
+                    logger.warning(f"{_logpfx} [Detail/{provider_info.name}] {error_msg}")
                     if attempt < max_retries - 1:
                         time.sleep(retry_delay)
                         retry_delay *= 2
                         continue
                     logger.info(
-                        f"[Detail/{provider_info.name}] ❌ 실패 ({elapsed:.0f}초): 응답 형식 오류"
+                        f"{_logpfx} [Detail/{provider_info.name}] ❌ 실패 ({elapsed:.0f}초): 응답 형식 오류"
                     )
                     return {"success": False, "error": error_msg}
 
@@ -423,10 +425,10 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                 finish_reason = choice.get("finish_reason", "unknown")
                 if finish_reason == "length":
                     logger.warning(
-                        f"[Detail/{provider_info.name}] ⚠️ 응답 잘림 ({elapsed:.0f}초): max_tokens 초과. 잘린 결괏값을 유지합니다."
+                        f"{_logpfx} [Detail/{provider_info.name}] ⚠️ 응답 잘림 ({elapsed:.0f}초): max_tokens 초과. 잘린 결괏값을 유지합니다."
                     )
                     logger.info(
-                        f"[Detail/{provider_info.name}] ⚠️ 경고 ({elapsed:.0f}초): 응답이 너무 길어 중간에 잘렸습니다."
+                        f"{_logpfx} [Detail/{provider_info.name}] ⚠️ 경고 ({elapsed:.0f}초): 응답이 너무 길어 중간에 잘렸습니다."
                     )
                     # 잘린 시점에 <h2> 앞부분이 없으면 검증만 실패하고 긴 요청이 허사로 재시도됨 → 최소 구조 삽입
                     _body = content.strip()
@@ -441,43 +443,43 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                 # 검증
                 validation = validate_detail_response(content)
                 if not validation["valid"]:
-                    logger.warning(f"[Detail/{provider_info.name}] ⚠️ 응답 검증 실패 ({elapsed:.0f}초): {validation['reason']}")
+                    logger.warning(f"{_logpfx} [Detail/{provider_info.name}] ⚠️ 응답 검증 실패 ({elapsed:.0f}초): {validation['reason']}")
                     if attempt < max_retries - 1:
                         time.sleep(retry_delay)
                         retry_delay *= 2
                         continue
                     logger.info(
-                        f"[Detail/{provider_info.name}] ❌ 실패 ({elapsed:.0f}초): {validation['reason']}"
+                        f"{_logpfx} [Detail/{provider_info.name}] ❌ 실패 ({elapsed:.0f}초): {validation['reason']}"
                     )
                     return {"success": False, "error": validation["reason"]}
 
                 tokens = usage.get("total_tokens", "?")
-                logger.info(f"[Detail/{provider_info.name}] ✅ 성공 ({elapsed:.0f}초, {tokens} tokens)")
-                logger.info(f"API Call Success. Tokens used: {usage}")
+                logger.info(f"{_logpfx} [Detail/{provider_info.name}] ✅ 성공 ({elapsed:.0f}초, {tokens} tokens)")
+                logger.info(f"{_logpfx} API Call Success. Tokens used: {usage}")
                 return {"success": True, "content": content, "usage": usage}
 
             elif response.status_code >= 500:
-                logger.warning(f"API Error {response.status_code}. 재시도 대기 {retry_delay}s...")
+                logger.warning(f"{_logpfx} API Error {response.status_code}. 재시도 대기 {retry_delay}s...")
                 time.sleep(retry_delay)
                 retry_delay *= 2
                 continue
             else:
                 error_msg = f"API Error {response.status_code}: {response.text[:200]}"
                 logger.info(
-                    f"[Detail/{provider_info.name}] ❌ 실패 ({elapsed:.0f}초): API Error {response.status_code}"
+                    f"{_logpfx} [Detail/{provider_info.name}] ❌ 실패 ({elapsed:.0f}초): API Error {response.status_code}"
                 )
                 return {"success": False, "error": error_msg}
 
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-            logger.warning(f"Network Error: {e}. 재시도 대기 {retry_delay}s...")
+            logger.warning(f"{_logpfx} Network Error: {e}. 재시도 대기 {retry_delay}s...")
             time.sleep(retry_delay)
             retry_delay *= 2
             continue
         except Exception as e:
-            logger.exception("상세 분석 API 호출 중 예외 발생")
+            logger.exception(f"{_logpfx} 상세 분석 API 호출 중 예외 발생")
             elapsed = time.time() - request_start if request_start else 0
             logger.info(
-                f"[Detail/{provider_info.name}] ❌ 예외 ({elapsed:.0f}초): {type(e).__name__}: {e}"
+                f"{_logpfx} [Detail/{provider_info.name}] ❌ 예외 ({elapsed:.0f}초): {type(e).__name__}: {e}"
             )
             return {"success": False, "error": str(e)}
 

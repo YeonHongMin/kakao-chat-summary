@@ -1,6 +1,6 @@
 # 💬 카카오톡 대화 분석기 (KakaoTalk Chat Summarizer)
 
-> **v2.9.4** | 최종 업데이트: 2026-05-04
+> **v2.9.5** | 최종 업데이트: 2026-05-05
 
 카카오톡 대화 내보내기 파일을 AI(LLM)를 활용하여 날짜별로 **상세 분석 HTML**을 생성하는 **데스크톱 GUI 애플리케이션**입니다.
 
@@ -220,6 +220,15 @@ logs/summarizer_20260201.log
 ---
 
 ## 📝 변경 이력
+
+자세한 수정 내역은 [`CHANGELOG.md`](CHANGELOG.md)를 참고하세요.
+
+### v2.9.5 (2026-05-05) - 토큤·로그·예제 env 정비
+- **MiniMax**: 기본 `max_tokens` 32768, `MINIMAX_MAX_TOKENS` 지원. 출력 잘림(`length`) 시 `<h2>` 없으면 부분 분석용 헤더 삽입으로 불필요 재시도 완화
+- **GLM**: 기본 `ZAI_MAX_TOKENS` 8192 → **32768** (상세 HTML 잘림 완화)
+- **로그**: `detail_prompt` API 로그에 `[채팅방 | 날짜]` 접두사 (`summarizer_*.log` / `info_*.log`)
+- **env.local.example**: 템플릿 복구·`ZAI_MAX_*` 등 `full_config` 대응 주석 정리
+- **UI**: `QTextBrowser` 선택 영역 스타일 (링크와 구분)
 
 ### v2.9.4 (2026-05-04) - 기본 LLM MiniMax 및 설정·LLM UI 정비
 - **기본 LLM**: 앱 기본 제공자를 MiniMax(`MiniMax-M2.7`)로 설정 (`full_config.Config.DEFAULT_PROVIDER`, 상세 분석 API 기본 인자, 워커 기본값)

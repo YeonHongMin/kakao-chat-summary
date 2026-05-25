@@ -1,6 +1,6 @@
 # 💬 카카오톡 대화 분석기 (KakaoTalk Chat Summarizer)
 
-> **v2.9.5** | 최종 업데이트: 2026-05-05
+> **v2.9.6** | 최종 업데이트: 2026-05-25
 
 카카오톡 대화 내보내기 파일을 AI(LLM)를 활용하여 날짜별로 **상세 분석 HTML**을 생성하는 **데스크톱 GUI 애플리케이션**입니다.
 
@@ -171,7 +171,7 @@ kakao-chat-summary/
 | `OPENAI_API_KEY` | LLM별 | OpenAI API 키 |
 | `MINIMAX_API_KEY` | LLM별 | MiniMax API 키 |
 | `PERPLEXITY_API_KEY` | LLM별 | Perplexity API 키 |
-| `LLM_PROVIDER` | - | 기본 LLM 제공자 (기본: glm) |
+| `LLM_PROVIDER` | - | 기본 LLM 제공자 (기본: minimax) |
 | `API_TIMEOUT` | - | API read 타임아웃 초 (기본: 600, connect: 60) |
 
 ---
@@ -222,6 +222,11 @@ logs/summarizer_20260201.log
 ## 📝 변경 이력
 
 자세한 수정 내역은 [`CHANGELOG.md`](CHANGELOG.md)를 참고하세요.
+
+### v2.9.6 (2026-05-25) - 성능 튜닝 및 UI 반응성 개선
+- **지연 로딩(Lazy Loading) 적용**: 탭 전환(날짜별 요약, URL 정보) 시 필요한 데이터만 지연 로드하여 방 클릭 시 즉각적인 반응성 확보
+- **UI 멈춤(Freezing) 해결**: 채팅방 전환 시 무거운 HTML 파일 및 JSON 데이터를 동기적으로 렌더링하던 병목 현상 제거
+- **QTimer 이벤트 분산**: 채팅방 목록 클릭 시 즉시 하이라이트 효과가 적용되도록 이벤트 루프 분산 처리 추가
 
 ### v2.9.5 (2026-05-05) - 토큤·로그·예제 env 정비
 - **MiniMax**: 기본 `max_tokens` 32768, `MINIMAX_MAX_TOKENS` 지원. 출력 잘림(`length`) 시 `<h2>` 없으면 부분 분석용 헤더 삽입으로 불필요 재시도 완화

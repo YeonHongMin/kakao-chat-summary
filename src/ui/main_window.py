@@ -1311,6 +1311,10 @@ class MainWindow(QMainWindow):
         # 채팅방 데이터 캐시 — 같은 방 재클릭 시 I/O 스킵
         self._room_cache: dict = {}  # {room_id: {"stats": ..., "loaded": True}}
         
+        # 탭 지연 로딩용 플래그
+        self._needs_date_update: bool = False
+        self._needs_url_update: bool = False
+        
         self._setup_ui()
         self._setup_menu()
         self._setup_statusbar()
@@ -1446,6 +1450,7 @@ class MainWindow(QMainWindow):
                 background-color: #EEEEEE;
             }
         """)
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
         
         # ===== 탭 1: 대시보드 =====
         dashboard_tab = QWidget()
@@ -2221,15 +2226,47 @@ class MainWindow(QMainWindow):
                 <p>채팅방 데이터가 없습니다.</p>
             """)
         
-        # 날짜 탭 업데이트
-        self._update_date_tab_for_room(room_name)
-        
-        # URL 탭 자동 로드
+        # 날짜 탭 및 URL 탭 지연 로딩 (Lazy Loading)
         self._current_url_data = {}
-        self._refresh_url_list()
+        
+        if hasattr(self, 'tab_widget'):
+            current_tab = self.tab_widget.currentIndex()
+            
+            # 날짜 탭 업데이트
+            if current_tab == 1:
+                QTimer.singleShot(10, lambda: self._update_date_tab_for_room(room_name))
+            else:
+                self._needs_date_update = True
+                
+            # URL 탭 업데이트
+            if current_tab == 2:
+                QTimer.singleShot(10, self._refresh_url_list)
+            else:
+                self._needs_url_update = True
+        else:
+            self._update_date_tab_for_room(room_name)
+            self._refresh_url_list()
 
         # 캐시에 등록 — 다음 동일 방 클릭 시 스킵
         self._room_cache[room_id] = {"loaded": True}
+    
+    @Slot(int)
+    def _on_tab_changed(self, index: int):
+        """탭 전환 시 필요한 데이터를 지연 로딩합니다."""
+        if not self.current_room_id:
+            return
+            
+        room = self.db.get_room_by_id(self.current_room_id)
+        if not room:
+            return
+            
+        if index == 1 and getattr(self, '_needs_date_update', False):
+            self._needs_date_update = False
+            QTimer.singleShot(10, lambda: self._update_date_tab_for_room(room.name))
+            
+        elif index == 2 and getattr(self, '_needs_url_update', False):
+            self._needs_url_update = False
+            QTimer.singleShot(10, self._refresh_url_list)
     
     @Slot()
     def _on_add_room(self):
@@ -4165,7 +4202,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.9.5</p>
+            <p>버전 2.9.6</p>
             <p>카카오톡 대화를 분석하고 AI로 상세 분석하는 도구입니다.</p>
             <p>제작자: 민연홍<br>
             <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>

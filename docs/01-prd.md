@@ -20,15 +20,16 @@
 ### 2.1 데스크톱 GUI 애플리케이션
 - **PySide6 기반** 네이티브 데스크톱 앱
 - **카카오톡 스타일** UI (노란색 테마)
-- **탭 인터페이스**: 대시보드, 날짜별 요약, URL 정보, 기타
+- **탭 인터페이스**: 대시보드, 날짜별 요약, URL 정보, 기타 (지연 로딩 적용)
+- **성능 최적화**: 대용량 데이터 로딩 시 UI 멈춤 방지 (지연 로딩 및 타이머 분산 처리)
 - **실시간 진행률 표시** 및 취소 기능
 
 ### 2.2 다중 LLM 지원
 | Provider | 모델 | 환경변수 | 비고 |
 |----------|------|----------|------|
-| Z.AI GLM | glm-4.5 | `ZAI_API_KEY` | 기본, 권장 |
+| Z.AI GLM | glm-4.5 | `ZAI_API_KEY` | 고용량 처리 |
 | OpenAI | gpt-4o-mini | `OPENAI_API_KEY` | ⚠️ Rate Limit |
-| MiniMax | MiniMax-M2.7 | `MINIMAX_API_KEY` | 고속 처리 |
+| MiniMax | MiniMax-M2.7 | `MINIMAX_API_KEY` | 기본, 권장 |
 | Perplexity | sonar | `PERPLEXITY_API_KEY` | |
 | DeepSeek | qwen-or (OpenRouter) | `OPENROUTER_API_KEY` | 32K 컨텍스트 |
 

@@ -5,6 +5,18 @@
 
 ---
 
+## [2.9.7] — 2026-06-08
+
+### 버그 수정
+
+- **Windows cp949 콘솔 인코딩 호환 (`src/app.py`)**
+  - 증상: Windows에서 `python.exe src/app.py`로 띄운 뒤 파일 업로드 시 `UnicodeEncodeError: 'cp949' codec can't encode character 'ℹ' in position 0`로 워커가 종료됨
+  - 원인: 일별 원본 파일 저장 후 `print(f"ℹ️ ... 과거 날짜 원본 파일 보호")` 호출 지점에서 Windows 콘솔 기본 인코딩(cp949)이 ℹ️(U+2139)를 인코딩하지 못함
+  - 수정: 앱 진입 시점에 `sys.stdout` / `sys.stderr`를 `utf-8 + errors="replace"`로 재설정. `reconfigure` 미지원이거나 `None`인 스트림(pythonw, 리다이렉트)은 안전 스킵
+  - 크로스 플랫폼: macOS/Linux는 stdout이 이미 UTF-8이라 no-op, Windows에서만 실질 동작
+
+---
+
 ## [2.9.6] — 2026-05-25
 
 ### 성능 최적화 및 UI 튜닝

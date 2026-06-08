@@ -1,6 +1,6 @@
 # 💬 카카오톡 대화 분석기 (KakaoTalk Chat Summarizer)
 
-> **v2.9.6** | 최종 업데이트: 2026-05-25
+> **v2.9.7** | 최종 업데이트: 2026-06-08
 
 카카오톡 대화 내보내기 파일을 AI(LLM)를 활용하여 날짜별로 **상세 분석 HTML**을 생성하는 **데스크톱 GUI 애플리케이션**입니다.
 
@@ -43,8 +43,8 @@
 
 | LLM | 키 | 환경변수 | 모델 | 비고 |
 |-----|-----|----------|------|------|
-| Z.AI GLM | `glm` | `ZAI_API_KEY` | glm-4.5 | 무제한 입력 / 최대 16,000출력 (기본, 권장) |
-| MiniMax | `minimax` | `MINIMAX_API_KEY` | MiniMax-M2.7 | 무제한 입력 / 최대 16,000출력 (고용량, 200k) |
+| MiniMax | `minimax` | `MINIMAX_API_KEY` | MiniMax-M3 | 무제한 입력 / 최대 32,768출력 (**기본, 권장**, 고용량 200k) |
+| Z.AI GLM | `glm` | `ZAI_API_KEY` | glm-4.5 | 무제한 입력 / 최대 32,768출력 (128k) |
 | OpenAI | `chatgpt` | `OPENAI_API_KEY` | gpt-4o-mini | 무제한 입력 / 최대 16,000출력 (⚠️ Rate Limit) |
 | Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | sonar | 무제한 입력 / 최대 16,000출력 |
 | DeepSeek(OR) | `qwen-or` | `OPENROUTER_API_KEY` | deepseek-chat | ⚠️ **최대 4만자 입력** / 8,000출력 제한 |
@@ -222,6 +222,11 @@ logs/summarizer_20260201.log
 ## 📝 변경 이력
 
 자세한 수정 내역은 [`CHANGELOG.md`](CHANGELOG.md)를 참고하세요.
+
+### v2.9.7 (2026-06-08) - Windows cp949 콘솔 인코딩 호환
+- 🐛 **업로드 시 `UnicodeEncodeError: 'cp949' codec can't encode character 'ℹ'` 수정**: Windows 콘솔 기본 인코딩에서 ℹ️(U+2139) 등 이모지 `print()` 실패로 워커가 종료되던 버그
+- 🔧 **`src/app.py`** 진입 시점에 `sys.stdout`/`sys.stderr`를 `utf-8 + errors="replace"`로 재설정. `reconfigure` 미지원·`None` 스트림은 안전 스킵
+- 🍎 **크로스 플랫폼**: macOS/Linux는 이미 UTF-8이라 no-op, Windows에서만 실질 동작
 
 ### v2.9.6 (2026-05-25) - 성능 튜닝 및 UI 반응성 개선
 - **지연 로딩(Lazy Loading) 적용**: 탭 전환(날짜별 요약, URL 정보) 시 필요한 데이터만 지연 로드하여 방 클릭 시 즉각적인 반응성 확보

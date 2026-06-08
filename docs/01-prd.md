@@ -29,7 +29,7 @@
 |----------|------|----------|------|
 | Z.AI GLM | glm-4.5 | `ZAI_API_KEY` | 고용량 처리 |
 | OpenAI | gpt-4o-mini | `OPENAI_API_KEY` | ⚠️ Rate Limit |
-| MiniMax | MiniMax-M2.7 | `MINIMAX_API_KEY` | 기본, 권장 |
+| MiniMax | MiniMax-M3 | `MINIMAX_API_KEY` | **기본, 권장** |
 | Perplexity | sonar | `PERPLEXITY_API_KEY` | |
 | DeepSeek | qwen-or (OpenRouter) | `OPENROUTER_API_KEY` | 32K 컨텍스트 |
 

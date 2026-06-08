@@ -1,6 +1,6 @@
 # 02. Technical Requirements Document (TRD)
 
-## 1. 시스템 아키텍처 (v2.9.6)
+## 1. 시스템 아키텍처 (v2.9.7)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -162,7 +162,7 @@ sys.exit(app.exec())
 |----------|---------|-------|----------|
 | glm | .../api/coding/paas/v4/chat/completions | glm-4.5 | ZAI_API_KEY |
 | chatgpt | .../v1/chat/completions | gpt-4o-mini | OPENAI_API_KEY |
-| minimax | .../v1/chat/completions | MiniMax-M2.7 | MINIMAX_API_KEY |
+| minimax | .../v1/chat/completions | MiniMax-M3 (**기본**) | MINIMAX_API_KEY |
 | perplexity | .../chat/completions | sonar | PERPLEXITY_API_KEY |
 
 **환경 변수 로드**:

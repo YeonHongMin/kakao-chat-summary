@@ -98,6 +98,11 @@
 
 ## 4. 버전 히스토리
 
+### v2.9.7 (2026-06-08)
+- **Windows cp949 콘솔 인코딩 호환**: `src/app.py` 진입 시 `sys.stdout`/`sys.stderr`를 UTF-8(`errors="replace"`)로 재설정
+- 파일 업로드 시 `print(ℹ️ ...)`이 cp949로 인코딩되지 못해 워커가 종료되던 `UnicodeEncodeError` 해결
+- macOS/Linux는 기본 UTF-8이라 no-op, `pythonw` 등 `None` 스트림은 안전 스킵
+
 ### v2.9.6 (2026-05-25)
 - **성능 튜닝 및 UI 반응성 개선**: 채팅방 클릭 시 파일 파싱 지연 로딩(Lazy Loading) 적용
 - UI 멈춤(Freezing) 방지 및 QTimer 이벤트 분산 최적화

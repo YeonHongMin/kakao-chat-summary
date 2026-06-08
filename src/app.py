@@ -9,6 +9,14 @@ import os
 import shutil
 from pathlib import Path
 
+# Windows 콘솔(cp949)에서 이모지 print 시 UnicodeEncodeError 방지
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 # 프로젝트 루트를 Python 경로에 추가
 _here = Path(__file__).resolve().parent
 sys.path.insert(0, str(_here))
@@ -40,7 +48,7 @@ def main():
     
     # 앱 정보 설정
     app.setApplicationName("카카오톡 대화 분석기")
-    app.setApplicationVersion("2.9.6")
+    app.setApplicationVersion("2.9.7")
     app.setOrganizationName("KakaoTalk Chat Summary")
     
     # 기본 폰트 설정 (한글 지원)

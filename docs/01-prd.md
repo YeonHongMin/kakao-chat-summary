@@ -27,7 +27,7 @@
 ### 2.2 다중 LLM 지원
 | Provider | 모델 | 환경변수 | 비고 |
 |----------|------|----------|------|
-| Z.AI GLM | glm-4.5 | `ZAI_API_KEY` | 고용량 처리 |
+| Z.AI GLM | glm-5.2 | `ZAI_API_KEY` | 1M context, 장문 분석 |
 | OpenAI | gpt-4o-mini | `OPENAI_API_KEY` | ⚠️ Rate Limit |
 | MiniMax | MiniMax-M3 | `MINIMAX_API_KEY` | **기본, 권장** |
 | Perplexity | sonar | `PERPLEXITY_API_KEY` | |

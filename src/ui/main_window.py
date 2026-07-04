@@ -1271,6 +1271,16 @@ class SettingsDialog(QDialog):
         self.llm_provider.setCurrentIndex(_sel)
         llm_layout.addRow("LLM 제공자:", self.llm_provider)
 
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setPlaceholderText("API 키를 입력하세요 (선택)")
+        self.api_key_input.setEchoMode(QLineEdit.Password)
+        init_key = _cfg.get_api_key(_pref)
+        if init_key and init_key != "no-key-needed":
+            self.api_key_input.setText(init_key)
+        
+        llm_layout.addRow("API 키:", self.api_key_input)
+        self.llm_provider.currentIndexChanged.connect(self._on_provider_changed)
+
         layout.addWidget(llm_group)
         
         # 버튼
@@ -1280,6 +1290,15 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _on_provider_changed(self, index):
+        from full_config import config as _cfg
+        key = self.llm_provider.itemData(index)
+        api_key = _cfg.get_api_key(key)
+        if api_key and api_key != "no-key-needed":
+            self.api_key_input.setText(api_key)
+        else:
+            self.api_key_input.clear()
 
 
 class MainWindow(QMainWindow):
@@ -2819,7 +2838,11 @@ class MainWindow(QMainWindow):
 
             key = dialog.llm_provider.currentData()
             if key:
-                _cfg.set_provider(key)
+                _cfg.save_provider_to_env(key)
+
+            api_key = dialog.api_key_input.text().strip()
+            if api_key:
+                _cfg.save_api_key_to_env(api_key, provider=key)
 
     @Slot()
     def _on_room_backup(self):
@@ -4202,7 +4225,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.9.7</p>
+            <p>버전 2.9.8</p>
             <p>카카오톡 대화를 분석하고 AI로 상세 분석하는 도구입니다.</p>
             <p>제작자: 민연홍<br>
             <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>

@@ -41,7 +41,50 @@ class LLMProvider:
     env_key: str
     max_tokens: int = 16000
     reasoning_effort: str = ""  # "high", "medium", "low", "none", "" (미지정)
-    max_input_chars: int = 0    # 0 = 무제한. 컨텍스트 윈도우가 작은 모델에 설정
+    max_input_chars: int = 0    # 0 = 무제한. 입력 문자 수 상한
+    max_input_bytes: int = 0    # 0 = 무제한. 입력 UTF-8 바이트 상한 (max_input_chars보다 우선)
+
+
+# 한글 대화 기준 토큰→문자 근사 (Z.AI 문서: 1 token ≈ 1.5 한글자)
+_CHARS_PER_TOKEN = 1.5
+
+
+def _input_chars_from_context(context_tokens: int, reserved_output_tokens: int) -> int:
+    """컨텍스트 토큰에서 출력 예약분을 뺀 입력 문자 수 상한."""
+    budget = max(context_tokens - reserved_output_tokens, 0)
+    return int(budget * _CHARS_PER_TOKEN)
+
+
+def _resolve_mimo_api_url() -> str:
+    """MiMo API URL. tp-(Token Plan) / sk-(종량제) 엔드포인트가 다름.
+
+    Token Plan 싱가포르 OpenAI 호환 Base:
+      https://token-plan-sgp.xiaomimimo.com/v1
+    → chat/completions: .../v1/chat/completions
+    """
+    explicit = os.getenv("MIMO_BASE_URL", "").strip()
+    if explicit:
+        base = explicit.rstrip("/")
+    else:
+        key = os.getenv("MIMO_API_KEY", "").strip()
+        if key.startswith("tp-"):
+            # Token Plan: pay-as-you-go URL과 혼용 불가 (401). 기본 싱가포르 클러스터
+            base = "https://token-plan-sgp.xiaomimimo.com/v1"
+        else:
+            base = "https://api.xiaomimimo.com/v1"
+    if base.endswith("/chat/completions"):
+        return base
+    return base + "/chat/completions"
+
+
+_ZAI_MAX_TOKENS = int(os.getenv("ZAI_MAX_TOKENS", "32768"))
+_OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "16384"))
+_MINIMAX_MAX_TOKENS = int(os.getenv("MINIMAX_MAX_TOKENS", "32768"))
+_PERPLEXITY_MAX_TOKENS = int(os.getenv("PERPLEXITY_MAX_TOKENS", "16000"))
+_XAI_MAX_TOKENS = int(os.getenv("XAI_MAX_TOKENS", "16000"))
+_OPENROUTER_MAX_TOKENS = int(os.getenv("OPENROUTER_MAX_TOKENS", "30000"))
+_KILO_MAX_TOKENS = int(os.getenv("KILO_MAX_TOKENS", "30000"))
+_MIMO_MAX_TOKENS = int(os.getenv("MIMO_MAX_TOKENS", "32768"))
 
 
 # 지원하는 LLM 제공자 목록
@@ -49,53 +92,87 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
     "glm": LLMProvider(
         name="Z.AI GLM",
         api_url="https://api.z.ai/api/coding/paas/v4/chat/completions",
-        model="glm-4.5",
+        model=os.getenv("ZAI_MODEL", "glm-5.2"),
         env_key="ZAI_API_KEY",
-        # 상세 HTML이 길어 8k에서 잘림 → MiniMax와 동일 기본. ZAI_MAX_TOKENS로 조절
-        max_tokens=int(os.getenv("ZAI_MAX_TOKENS", "32768")),
-        max_input_chars=int(os.getenv("ZAI_MAX_INPUT_CHARS", "1500000"))  # 약 1.5MB 문자수(대략 1M 토큰) 제한
+        max_tokens=_ZAI_MAX_TOKENS,
+        # glm-5.2: 1M context, 최대 출력 128K tokens (docs.z.ai/guides/llm/glm-5.2)
+        max_input_chars=int(os.getenv(
+            "ZAI_MAX_INPUT_CHARS",
+            str(_input_chars_from_context(1_000_000, _ZAI_MAX_TOKENS)),
+        )),
     ),
     "chatgpt": LLMProvider(
         name="OpenAI ChatGPT",
         api_url="https://api.openai.com/v1/chat/completions",
         model="gpt-4o-mini",
-        env_key="OPENAI_API_KEY"
+        env_key="OPENAI_API_KEY",
+        max_tokens=_OPENAI_MAX_TOKENS,
+        # 공식 컨텍스트 128K, 최대 출력 16K tokens (OpenAI)
+        max_input_chars=int(os.getenv(
+            "OPENAI_MAX_INPUT_CHARS",
+            str(_input_chars_from_context(128_000, _OPENAI_MAX_TOKENS)),
+        )),
     ),
     "minimax": LLMProvider(
         name="MiniMax Coding Plan",
         api_url="https://api.minimax.io/v1/chat/completions",
         model="MiniMax-M3",
         env_key="MINIMAX_API_KEY",
-        # 상세 HTML이 길어 16k에서 자주 잘림 → 기본 상향. API/요금에 맞게 MINIMAX_MAX_TOKENS로 조절
-        max_tokens=int(os.getenv("MINIMAX_MAX_TOKENS", "32768")),
+        max_tokens=_MINIMAX_MAX_TOKENS,
+        # 공식 최대 1M tokens, 표준 요금 구간 512K (platform.minimax.io)
+        max_input_chars=int(os.getenv(
+            "MINIMAX_MAX_INPUT_CHARS",
+            str(_input_chars_from_context(512_000, _MINIMAX_MAX_TOKENS)),
+        )),
     ),
     "perplexity": LLMProvider(
         name="Perplexity",
         api_url="https://api.perplexity.ai/chat/completions",
         model="sonar",
-        env_key="PERPLEXITY_API_KEY"
+        env_key="PERPLEXITY_API_KEY",
+        max_tokens=_PERPLEXITY_MAX_TOKENS,
+        # sonar 공식 컨텍스트 128K tokens (docs.perplexity.ai)
+        max_input_chars=int(os.getenv(
+            "PERPLEXITY_MAX_INPUT_CHARS",
+            str(_input_chars_from_context(128_000, _PERPLEXITY_MAX_TOKENS)),
+        )),
     ),
     "grok": LLMProvider(
         name="xAI Grok",
         api_url="https://api.x.ai/v1/chat/completions",
         model="grok-4-1-fast-non-reasoning",
-        env_key="XAI_API_KEY"
+        env_key="XAI_API_KEY",
+        max_tokens=_XAI_MAX_TOKENS,
+        # grok-4-1-fast-non-reasoning: 2M tokens (xAI/서드파티 스펙)
+        max_input_chars=int(os.getenv("XAI_MAX_INPUT_CHARS", "0")),
     ),
     "qwen-or": LLMProvider(
         name="OpenRouter",
         api_url="https://openrouter.ai/api/v1/chat/completions",
         model=os.getenv("OPENROUTER_MODEL", "x-ai/grok-4.1-fast"),
         env_key="OPENROUTER_API_KEY",
-        max_tokens=int(os.getenv("OPENROUTER_MAX_TOKENS", "30000")),
-        max_input_chars=int(os.getenv("OPENROUTER_MAX_INPUT_CHARS", "0")),  # 0 = 무제한 (grok-4.1-fast: 2M context)
+        max_tokens=_OPENROUTER_MAX_TOKENS,
+        max_input_chars=int(os.getenv("OPENROUTER_MAX_INPUT_CHARS", "0")),  # 0 = 무제한 (기본 모델 2M context)
     ),
     "qwen-kilo": LLMProvider(
         name="Kilo",
         api_url="https://api.kilo.ai/api/gateway/chat/completions",
         model=os.getenv("KILO_MODEL", "x-ai/grok-4.1-fast"),
         env_key="KILO_API_KEY",
-        max_tokens=int(os.getenv("KILO_MAX_TOKENS", "30000")),
-        max_input_chars=int(os.getenv("KILO_MAX_INPUT_CHARS", "0")),  # 0 = 무제한 (grok-4.1-fast: 2M context)
+        max_tokens=_KILO_MAX_TOKENS,
+        max_input_chars=int(os.getenv("KILO_MAX_INPUT_CHARS", "0")),  # 0 = 무제한 (기본 모델 2M context)
+    ),
+    "mimo": LLMProvider(
+        name="Xiaomi MiMo",
+        api_url=_resolve_mimo_api_url(),
+        model="mimo-v2.5-pro",
+        env_key="MIMO_API_KEY",
+        max_tokens=_MIMO_MAX_TOKENS,
+        # mimo-v2.5-pro: 1M context, 최대 출력 128K tokens (platform.xiaomimimo.com)
+        max_input_chars=int(os.getenv(
+            "MIMO_MAX_INPUT_CHARS",
+            str(_input_chars_from_context(1_000_000, _MIMO_MAX_TOKENS)),
+        )),
     ),
     "ollama": LLMProvider(
         name="Local LLM",
@@ -165,6 +242,51 @@ class Config:
     def set_api_key(self, api_key: str, provider: Optional[str] = None) -> None:
         provider = provider or self.current_provider
         self._api_keys[provider] = api_key.strip()
+
+    def _write_env_var(self, env_key: str, value: str) -> None:
+        """`.env.local`에 KEY=value 한 줄을 갱신하거나 추가합니다."""
+        env_file = self.base_dir / '.env.local'
+        lines: list[str] = []
+        if env_file.exists():
+            with open(env_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+        prefix = f"{env_key}="
+        updated = False
+        for i, line in enumerate(lines):
+            if line.startswith(prefix):
+                lines[i] = f"{prefix}{value}\n"
+                updated = True
+                break
+
+        if not updated:
+            if lines and not lines[-1].endswith('\n'):
+                lines.append('\n')
+            lines.append(f"{prefix}{value}\n")
+
+        with open(env_file, 'w', encoding='utf-8') as f:
+            f.writelines(lines)
+
+        os.environ[env_key] = value
+
+    def save_provider_to_env(self, provider: str) -> None:
+        """선택한 LLM 제공자를 메모리와 `.env.local`에 저장합니다."""
+        self.set_provider(provider)
+        self._write_env_var("LLM_PROVIDER", provider)
+
+    def save_api_key_to_env(self, api_key: str, provider: Optional[str] = None) -> None:
+        """API 키를 메모리와 `.env.local`에 저장합니다. 빈 값이면 기존 파일 값을 유지합니다."""
+        provider = provider or self.current_provider
+        provider_info = LLM_PROVIDERS[provider]
+        if not provider_info.env_key:
+            return
+
+        stripped = api_key.strip()
+        if not stripped:
+            return
+
+        self.set_api_key(stripped, provider)
+        self._write_env_var(provider_info.env_key, stripped)
 
     @property
     def zai_api_key(self) -> Optional[str]:

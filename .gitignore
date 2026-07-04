@@ -33,6 +33,7 @@ Thumbs.db
 .gemini/
 .claude/
 .kilo/
+terminals/
 
 # Test (임시)
 test_sync.py

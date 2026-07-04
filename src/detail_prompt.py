@@ -285,6 +285,27 @@ def _extract_error_message(data: Dict[str, Any]) -> str:
     return ""
 
 
+def _truncate_input_text(text: str, provider_info, log_prefix: str) -> str:
+    """프로바이더별 입력 상한에 맞게 대화 텍스트를 자릅니다."""
+    if provider_info.max_input_bytes > 0:
+        raw = text.encode("utf-8")
+        if len(raw) > provider_info.max_input_bytes:
+            logger.warning(
+                f"{log_prefix} [Detail/{provider_info.name}] 입력 {len(raw):,} bytes가 "
+                f"한계({provider_info.max_input_bytes:,} bytes) 초과 — 앞부분만 사용합니다."
+            )
+            text = raw[: provider_info.max_input_bytes].decode("utf-8", errors="ignore")
+
+    if provider_info.max_input_chars > 0 and len(text) > provider_info.max_input_chars:
+        logger.warning(
+            f"{log_prefix} [Detail/{provider_info.name}] 입력 텍스트 {len(text):,}자가 "
+            f"한계({provider_info.max_input_chars:,}자) 초과 — 앞부분만 사용합니다."
+        )
+        text = text[: provider_info.max_input_chars]
+
+    return text
+
+
 def call_detail_llm(text: str, room_name: str, date_str: str,
                     provider: str = "minimax") -> Dict[str, Any]:
     """
@@ -317,19 +338,19 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
             logger.info(f"{_logpfx} [Detail/ChatGPT] Rate Limit 대기 {wait_time:.1f}s...")
             time.sleep(wait_time)
 
-    # 입력 컨텍스트 초과 방지: max_input_chars가 설정된 프로바이더는 텍스트 잘라내기
-    if provider_info.max_input_chars > 0 and len(text) > provider_info.max_input_chars:
-        logger.warning(
-            f"{_logpfx} [Detail/{provider_info.name}] 입력 텍스트 {len(text):,}자가 한계({provider_info.max_input_chars:,}자) 초과 — 앞부분만 사용합니다."
-        )
-        text = text[:provider_info.max_input_chars]
+    # 입력 컨텍스트 초과 방지
+    text = _truncate_input_text(text, provider_info, _logpfx)
 
     prompt = generate_detail_prompt(text, room_name, date_str)
 
     headers = {
-        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
+    if provider == "mimo":
+        # MiMo 공식 문서: api-key 헤더 (Token Plan / 종량제 공통)
+        headers["api-key"] = api_key
+    else:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     payload = {
         "model": provider_info.model,
@@ -340,6 +361,10 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
             {"role": "user", "content": prompt}
         ]
     }
+    if provider == "mimo":
+        payload.pop("max_tokens", None)
+        payload["max_completion_tokens"] = provider_info.max_tokens
+        payload["thinking"] = {"type": "disabled"}
     if provider_info.reasoning_effort:
         payload["reasoning_effort"] = provider_info.reasoning_effort
 

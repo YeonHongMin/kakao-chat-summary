@@ -3,6 +3,31 @@
 형식: [Semantic Versioning](https://semver.org/)에 가깝게 **주.부.패치**로 표기합니다.  
 이전 버전의 상세 히스토리는 `README.md`의 “변경 이력” 절과 `docs/06-tasks.md`를 참고하세요.
 
+## [2.9.8] — 2026-07-04
+
+### 추가 및 변경
+
+- **설정 다이얼로그(UI)에서 API 키·LLM 제공자 저장 (`src/ui/main_window.py`, `src/full_config.py`)**
+  - 도구 → 설정에서 LLM 제공자와 API 키를 입력해 `.env.local`에 영구 저장
+  - 제공자 콤보박스 변경 시 해당 키를 불러옴 (Ollama는 키 불필요)
+  - `LLM_PROVIDER`도 `.env.local`에 저장되어 재시작 후에도 유지
+  - 빈 API 키로 확인 시 기존 `.env.local` 값을 덮어쓰지 않음
+- **Xiaomi MiMo LLM 제공자 추가 (`full_config.py`, `detail_prompt.py`, `env.local.example`)**
+  - 모델 `mimo-v2.5-pro`, `MIMO_API_KEY` 환경 변수
+  - MiMo API 호환: `max_completion_tokens`, `thinking: {type: disabled}`, `api-key` 헤더
+  - MiMo Token Plan(`tp-`) 전용 Base URL 자동/수동 설정 (`MIMO_BASE_URL`, 종량제 `sk-`와 URL 혼용 시 401)
+- **LLM별 입력 컨텍스트 상한 정비 (`full_config.py`, `env.local.example`)**
+  - `_input_chars_from_context()` 도입: `(공식 컨텍스트 tokens − max_tokens) × 1.5` (한글 대화 근사)
+  - **GLM-5.2 업그레이드**: `glm-4.5` → `glm-5.2` (1M context, 출력 128K), `ZAI_MAX_INPUT_CHARS=1450848`, `ZAI_MODEL` env 지원
+  - gpt-4o-mini 128K → `OPENAI_MAX_INPUT_CHARS=167424` (신규 `OPENAI_MAX_TOKENS`)
+  - MiniMax-M3 512K(표준 요금) → `MINIMAX_MAX_INPUT_CHARS=718848`
+  - sonar 128K → `PERPLEXITY_MAX_INPUT_CHARS=168000` (신규 `PERPLEXITY_MAX_TOKENS`)
+  - MiMo 1M → `MIMO_MAX_INPUT_CHARS=1450848`, `MIMO_MAX_TOKENS=32768`
+  - Grok/OpenRouter/Kilo/Ollama: 기본 `*_MAX_INPUT_CHARS=0` (자르기 없음)
+  - 잘못된 GLM/MiMo `1500000` chars·MiMo 1 MiB bytes 가정 제거
+- **문서**: `README.md`, `CLAUDE.md`, `docs/02-trd.md`, `docs/03-user-flow.md`, `docs/06-tasks.md` v2.9.8 반영
+- 앱 전반 버전 `2.9.8` (`src/app.py`, About 다이얼로그)
+
 ---
 
 ## [2.9.7] — 2026-06-08

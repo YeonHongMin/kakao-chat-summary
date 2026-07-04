@@ -1,6 +1,6 @@
 # 💬 카카오톡 대화 분석기 (KakaoTalk Chat Summarizer)
 
-> **v2.9.7** | 최종 업데이트: 2026-06-08
+> **v2.9.8** | 최종 업데이트: 2026-07-04
 
 카카오톡 대화 내보내기 파일을 AI(LLM)를 활용하여 날짜별로 **상세 분석 HTML**을 생성하는 **데스크톱 GUI 애플리케이션**입니다.
 
@@ -8,7 +8,7 @@
 
 - 🖥️ **데스크톱 GUI**: PySide6 기반 네이티브 앱 (카카오톡 스타일 UI)
 - 🔍 **상세 분석 HTML**: 토픽별 심층 분석 + URL 모음 + 감정 분석을 다크 테마 HTML로 생성
-- 🤖 **다중 LLM 지원**: GLM, OpenAI, MiniMax, Perplexity, Grok, OpenRouter, Kilo, Ollama
+- 🤖 **다중 LLM 지원**: GLM, OpenAI, MiniMax, Perplexity, Grok, OpenRouter, Kilo, **MiMo**, Ollama
 - 🌐 **전체 채팅방 일괄 처리**: 모든 채팅방 상세 분석/URL 동기화를 한 번에 수행
 - 🔗 **URL 자동 추출**: 상세 분석 HTML에서 공유된 링크를 별도 탭에서 확인
 - 📊 **대시보드**: 채팅방 통계 확인
@@ -44,14 +44,14 @@
 | LLM | 키 | 환경변수 | 모델 | 비고 |
 |-----|-----|----------|------|------|
 | MiniMax | `minimax` | `MINIMAX_API_KEY` | MiniMax-M3 | 무제한 입력 / 최대 32,768출력 (**기본, 권장**, 고용량 200k) |
-| Z.AI GLM | `glm` | `ZAI_API_KEY` | glm-4.5 | 무제한 입력 / 최대 32,768출력 (128k) |
+| Z.AI GLM | `glm` | `ZAI_API_KEY` | glm-5.2 | 입력 1.45M chars / 최대 32,768출력 (1M context) |
 | OpenAI | `chatgpt` | `OPENAI_API_KEY` | gpt-4o-mini | 무제한 입력 / 최대 16,000출력 (⚠️ Rate Limit) |
 | Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | sonar | 무제한 입력 / 최대 16,000출력 |
 | DeepSeek(OR) | `qwen-or` | `OPENROUTER_API_KEY` | deepseek-chat | ⚠️ **최대 4만자 입력** / 8,000출력 제한 |
 | DeepSeek(Kilo)| `qwen-kilo` | `KILO_API_KEY` | deepseek-chat | ⚠️ **최대 4만자 입력** / 8,000출력 제한 |
 
-> **💡 LLM 모델 컨텍스트 제약 사항 (v2.8.4)**
-> 대화량이 방대할 경우(수백 KB 이상의 대화 내역), **DeepSeek 모델(32K 한계)은 자체 컨텍스트 윈도우 한계를 초과하여 에러가 발생합니다.** 이를 막기위해 **입력 문자열을 40,000자로 강제 제한(앞부분만 잘라냄)하고 출력수도 8,000 토큰으로 제약**하고 있습니다. 대화량이 많아 생성할 토픽 수가 많을 것으로 예상되는 긴 채빙팅방은 컨텍스트가 광활한 **MiniMax(200K)나 GLM(128K) 모델 사용을 적극 권장**합니다.
+> **💡 LLM 모델 컨텍스트 제약 사항**
+> 대화량이 방대할 경우, **GLM-5.2(1M)**·**MiniMax-M3(512K~1M)**·**MiMo(1M)** 등 장문 컨텍스트 모델 사용을 권장합니다. OpenRouter/Kilo 기본 모델(grok-4.1-fast)은 2M context이며 앱에서 입력 자르기를 하지 않습니다(0).
 
 ---
 
@@ -81,19 +81,24 @@ pip install -r requirements.txt
 ```
 
 ### 3. API 키 설정
+
+**방법 A — 설정 다이얼로그 (v2.9.8, 권장)**  
+앱 실행 후 **도구 → 설정**에서 LLM 제공자를 선택하고 API 키를 입력한 뒤 확인합니다.  
+`LLM_PROVIDER`와 API 키가 `.env.local`에 저장되며, 재시작 후에도 유지됩니다.  
+키 입력란을 비운 채 확인하면 기존 `.env.local`의 키는 그대로 둡니다.
+
+**방법 B — `.env.local` 직접 편집**  
 `.env.local`은 **env.local.example**을 기준으로 만듭니다.  
-앱을 처음 실행하면 `.env.local`이 없을 경우 `env.local.example`을 복사해 자동 생성됩니다.  
-생성된 `.env.local`을 열어 사용할 LLM의 API 키만 입력하면 됩니다.
+앱을 처음 실행하면 `.env.local`이 없을 경우 `env.local.example`을 복사해 자동 생성됩니다.
 
 (수동으로 만들려면: `cp env.local.example .env.local`)
 
 `.env.local` 예시:
 ```env
-# 사용할 LLM의 API 키만 설정하면 됩니다
-ZAI_API_KEY=your-glm-key
-OPENAI_API_KEY=your-openai-key
+LLM_PROVIDER=minimax
 MINIMAX_API_KEY=your-minimax-key
-PERPLEXITY_API_KEY=your-perplexity-key
+ZAI_API_KEY=your-glm-key
+MIMO_API_KEY=your-mimo-key
 ```
 
 ---
@@ -168,11 +173,32 @@ kakao-chat-summary/
 | 변수명 | 필수 | 설명 |
 |--------|------|------|
 | `ZAI_API_KEY` | LLM별 | Z.AI GLM API 키 |
+| `ZAI_MODEL` | - | GLM 모델 ID (기본: `glm-5.2`, 1M 명시: `glm-5.2[1m]`) |
+| `ZAI_MAX_TOKENS` | - | GLM 최대 출력 토큰 (기본: 32768, API 상한 131072) |
+| `ZAI_MAX_INPUT_CHARS` | - | GLM 입력 문자 상한 (기본: 1450848, 1M context 기준) |
 | `OPENAI_API_KEY` | LLM별 | OpenAI API 키 |
-| `MINIMAX_API_KEY` | LLM별 | MiniMax API 키 |
+| `OPENAI_MAX_TOKENS` | - | gpt-4o-mini 최대 출력 (기본: 16384) |
+| `OPENAI_MAX_INPUT_CHARS` | - | OpenAI 입력 문자 상한 (기본: 167424) |
+| `MINIMAX_API_KEY` | LLM별 | MiniMax API 키 (기본 LLM) |
+| `MINIMAX_MAX_TOKENS` | - | MiniMax 최대 출력 (기본: 32768) |
+| `MINIMAX_MAX_INPUT_CHARS` | - | MiniMax 입력 문자 상한 (기본: 718848, 512K context 기준) |
 | `PERPLEXITY_API_KEY` | LLM별 | Perplexity API 키 |
-| `LLM_PROVIDER` | - | 기본 LLM 제공자 (기본: minimax) |
-| `API_TIMEOUT` | - | API read 타임아웃 초 (기본: 600, connect: 60) |
+| `PERPLEXITY_MAX_TOKENS` | - | sonar 최대 출력 (기본: 16000) |
+| `PERPLEXITY_MAX_INPUT_CHARS` | - | sonar 입력 문자 상한 (기본: 168000) |
+| `XAI_API_KEY` | LLM별 | xAI Grok API 키 |
+| `XAI_MAX_TOKENS` | - | Grok 최대 출력 (기본: 16000) |
+| `XAI_MAX_INPUT_CHARS` | - | Grok 입력 상한 (기본: 0=무제한, 2M context) |
+| `OPENROUTER_API_KEY` | LLM별 | OpenRouter API 키 |
+| `OPENROUTER_MAX_TOKENS` | - | OpenRouter 최대 출력 (기본: 30000) |
+| `OPENROUTER_MAX_INPUT_CHARS` | - | OpenRouter 입력 상한 (기본: 0) |
+| `KILO_API_KEY` | LLM별 | Kilo AI Gateway API 키 |
+| `KILO_MAX_TOKENS` | - | Kilo 최대 출력 (기본: 30000) |
+| `KILO_MAX_INPUT_CHARS` | - | Kilo 입력 상한 (기본: 0) |
+| `MIMO_API_KEY` | LLM별 | Xiaomi MiMo API 키 |
+| `MIMO_MAX_TOKENS` | - | MiMo 최대 출력 (기본: 32768, API 상한 128K) |
+| `MIMO_MAX_INPUT_CHARS` | - | MiMo 입력 문자 상한 (기본: 1450848, 1M context 기준) |
+| `LLM_PROVIDER` | - | 기본 LLM (`glm`, `chatgpt`, `minimax`, `perplexity`, `grok`, `qwen-or`, `qwen-kilo`, `mimo`, `ollama`) |
+| `API_TIMEOUT` | - | API read 타임아웃 초 (기본: 1200, connect: 60) |
 
 ---
 
@@ -222,6 +248,13 @@ logs/summarizer_20260201.log
 ## 📝 변경 이력
 
 자세한 수정 내역은 [`CHANGELOG.md`](CHANGELOG.md)를 참고하세요.
+
+### v2.9.8 (2026-07-04) - 설정 다이얼로그·MiMo·컨텍스트 상한 정비
+- ⚙️ **설정 다이얼로그**: 도구 → 설정에서 LLM 제공자·API 키를 `.env.local`에 영구 저장 (재시작 후 유지)
+- 🛡️ **빈 키 보호**: API 키 입력란을 비운 채 확인해도 기존 `.env.local` 키를 덮어쓰지 않음
+- 🆕 **Xiaomi MiMo**: `mimo-v2.5-pro` 제공자 추가 (`MIMO_API_KEY`, API 호환 payload)
+- 📏 **입력 컨텍스트 상한**: 공식 스펙 기준 `(context − max_tokens) × 1.5` chars로 제공자별 기본값 정비
+- 🔄 **GLM-5.2**: `glm-4.5` → `glm-5.2` (1M context), `ZAI_MAX_INPUT_CHARS=1450848`
 
 ### v2.9.7 (2026-06-08) - Windows cp949 콘솔 인코딩 호환
 - 🐛 **업로드 시 `UnicodeEncodeError: 'cp949' codec can't encode character 'ℹ'` 수정**: Windows 콘솔 기본 인코딩에서 ℹ️(U+2139) 등 이모지 `print()` 실패로 워커가 종료되던 버그

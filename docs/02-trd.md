@@ -1,6 +1,6 @@
 # 02. Technical Requirements Document (TRD)
 
-## 1. 시스템 아키텍처 (v2.9.7)
+## 1. 시스템 아키텍처 (v2.9.8)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -75,7 +75,7 @@ sys.exit(app.exec())
 | `SummaryProgressDialog` | 요약 진행률 다이얼로그 (레거시, 보존) |
 | `SummaryProgressWidget` | 상태바 내장 비모달 프로그레스 위젯 (v2.9.2: HBox 레이아웃) |
 | `DashboardCard` | 대시보드 통계 카드 (컴팩트, update_card 메서드) |
-| `SettingsDialog` | 설정 다이얼로그 |
+| `SettingsDialog` | 설정 다이얼로그 (LLM 제공자·API 키 → `.env.local` 영구 저장) |
 
 **탭 구조**:
 1. **📊 대시보드**: 채팅방 통계, 최근 요약
@@ -160,10 +160,31 @@ sys.exit(app.exec())
 **LLM 제공자 설정**:
 | Provider | API URL | Model | 환경변수 |
 |----------|---------|-------|----------|
-| glm | .../api/coding/paas/v4/chat/completions | glm-4.5 | ZAI_API_KEY |
+| glm | .../api/coding/paas/v4/chat/completions | glm-5.2 | ZAI (1M ctx, 입력 1450848 chars) |
 | chatgpt | .../v1/chat/completions | gpt-4o-mini | OPENAI_API_KEY |
 | minimax | .../v1/chat/completions | MiniMax-M3 (**기본**) | MINIMAX_API_KEY |
 | perplexity | .../chat/completions | sonar | PERPLEXITY_API_KEY |
+| grok | .../v1/chat/completions | grok-4-1-fast-non-reasoning | XAI_API_KEY |
+| qwen-or | openrouter.ai | (OPENROUTER_MODEL) | OPENROUTER_API_KEY |
+| qwen-kilo | kilo.ai gateway | (KILO_MODEL) | KILO_API_KEY |
+| mimo | token-plan-sgp.xiaomimimo.com (tp-) / api.xiaomimimo.com (sk-) | mimo-v2.5-pro | MIMO (1M ctx) |
+| ollama | (OLLAMA_BASE_URL) | (OLLAMA_MODEL) | (없음) |
+
+**Config 주요 메서드** (v2.9.8):
+- `save_provider_to_env(provider)` — `LLM_PROVIDER`를 `.env.local`에 저장
+- `save_api_key_to_env(api_key, provider)` — API 키 저장 (빈 값이면 파일 미갱신)
+- `_input_chars_from_context(context_tokens, reserved_output_tokens)` — 입력 chars 상한 계산
+
+**입력 컨텍스트 기본값** (v2.9.8, `(context − max_tokens) × 1.5` chars):
+
+| Provider | Context | max_tokens | max_input_chars |
+|----------|---------|------------|-----------------|
+| glm | 1M | 32768 | 1450848 |
+| chatgpt | 128K | 16384 | 167424 |
+| minimax | 512K | 32768 | 718848 |
+| perplexity | 128K | 16000 | 168000 |
+| mimo | 1M | 32768 | 1450848 |
+| grok / qwen-or / qwen-kilo / ollama | 2M / — | — | 0 (무제한) |
 
 **환경 변수 로드**:
 - `.env.local` (우선순위 높음)

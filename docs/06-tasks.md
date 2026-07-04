@@ -98,6 +98,11 @@
 
 ## 4. 버전 히스토리
 
+### v2.9.8 (2026-07-04)
+- **설정 다이얼로그**: LLM 제공자·API 키 UI 저장 (`save_provider_to_env`, `save_api_key_to_env`), 빈 키 덮어쓰기 방지
+- **Xiaomi MiMo**: `mimo-v2.5-pro` 제공자·`MIMO_API_KEY`·API 호환 payload
+- **GLM-5.2**: `glm-4.5` → `glm-5.2`, 1M context, `ZAI_MAX_INPUT_CHARS=1450848`, `ZAI_MODEL` env
+
 ### v2.9.7 (2026-06-08)
 - **Windows cp949 콘솔 인코딩 호환**: `src/app.py` 진입 시 `sys.stdout`/`sys.stderr`를 UTF-8(`errors="replace"`)로 재설정
 - 파일 업로드 시 `print(ℹ️ ...)`이 cp949로 인코딩되지 못해 워커가 종료되던 `UnicodeEncodeError` 해결

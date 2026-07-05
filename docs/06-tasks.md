@@ -98,6 +98,10 @@
 
 ## 4. 버전 히스토리
 
+### v2.9.9 (2026-07-05)
+- **URL 탭**: `_strip_html_to_text`, `merge_urls_by_date`, HTML 이스케이프 렌더링
+- **보안 문서**: README 데이터 보안, `startup_log.txt` gitignore
+
 ### v2.9.8 (2026-07-04)
 - **설정 다이얼로그**: LLM 제공자·API 키 UI 저장 (`save_provider_to_env`, `save_api_key_to_env`), 빈 키 덮어쓰기 방지
 - **Xiaomi MiMo**: `mimo-v2.5-pro` 제공자·`MIMO_API_KEY`·API 호환 payload

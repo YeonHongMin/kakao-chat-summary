@@ -226,6 +226,57 @@ def extract_urls_from_text(text: str, section_only: bool = False) -> Dict[str, L
     return dict(url_descriptions)
 
 
+def _strip_html_to_text(fragment: str) -> str:
+    """HTML 조각에서 순수 텍스트만 추출.
+
+    LLM이 생성한 잘못된 태그(`</nbsp;`, `<nbsp>` 등)가 설명에 남아
+    URL 탭 렌더링을 깨뜨리는 것을 방지한다 (v2.9.9).
+    """
+    # &nbsp; 엔티티 및 깨진 nbsp 태그 변형 → 공백
+    text = re.sub(r'&nbsp;?', ' ', fragment)
+    text = re.sub(r'</?\s*nbsp;?>?', ' ', text, flags=re.IGNORECASE)
+    # 정상 태그 제거
+    text = re.sub(r'<[^>]+>', '', text)
+    # 남은 태그 조각 제거 (닫는 > 가 없는 경우: "</hp", "<div" 등)
+    text = re.sub(r'</?[a-zA-Z][a-zA-Z0-9]*;?', ' ', text)
+    # 공백 정리
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def merge_urls_by_date(urls_by_date: Dict[str, Dict[str, List[str]]],
+                       start_date=None) -> Dict[str, List[str]]:
+    """날짜별 URL 딕셔너리를 병합. 같은 URL은 가장 최근 날짜의 설명만 유지.
+
+    같은 URL이 여러 날짜의 상세 분석에 등장할 때 설명 블록(제목/내용/시사점/활용)이
+    무한 누적되는 것을 방지한다 (v2.9.9).
+
+    Args:
+        urls_by_date: {"YYYY-MM-DD": {url: [descriptions]}} 딕셔너리
+        start_date: date 객체. 지정 시 해당 날짜 이후(포함)만 병합
+
+    Returns:
+        {url: [descriptions]} — 최신 날짜의 설명 블록 우선
+    """
+    from datetime import date as _date
+
+    merged: Dict[str, List[str]] = {}
+    # 최신 날짜부터 순회 → URL 최초 등장(=최신) 설명만 채택
+    for ds in sorted(urls_by_date.keys(), reverse=True):
+        if start_date is not None:
+            try:
+                if _date.fromisoformat(ds) < start_date:
+                    continue
+            except (ValueError, TypeError):
+                continue
+        for url, descs in urls_by_date[ds].items():
+            if url not in merged:
+                merged[url] = [d for d in descs if d]
+            elif not merged[url] and descs:
+                # 최신 날짜에 설명이 없었으면 과거 설명으로 보충
+                merged[url] = [d for d in descs if d]
+    return merged
+
+
 def extract_urls_from_html(html_text: str) -> Dict[str, List[str]]:
     """
     상세 분석 HTML에서 URL과 설명을 추출합니다 (v2.9.0).
@@ -263,13 +314,13 @@ def extract_urls_from_html(html_text: str) -> Dict[str, List[str]]:
         # 제목 추출 (<h3>...</h3>)
         h3_match = re.search(r'<h3>(.*?)</h3>', card_html, re.DOTALL)
         if h3_match:
-            title = re.sub(r'<[^>]+>', '', h3_match.group(1)).strip()
+            title = _strip_html_to_text(h3_match.group(1))
             if title and title not in url_descriptions[url]:
                 url_descriptions[url].append(title)
 
         # 내용/시사점/활용 추출 (<li>...</li>)
         for li_match in re.finditer(r'<li>(.*?)</li>', card_html, re.DOTALL):
-            li_text = re.sub(r'<[^>]+>', '', li_match.group(1)).strip()
+            li_text = _strip_html_to_text(li_match.group(1))
             if li_text and li_text not in url_descriptions[url]:
                 url_descriptions[url].append(li_text)
 

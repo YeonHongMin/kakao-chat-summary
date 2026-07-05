@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QLineEdit, QRadioButton, QButtonGroup, QCheckBox, QProgressDialog,
     QTabWidget, QDateEdit, QCalendarWidget, QSystemTrayIcon, QStyle
 )
+from html import escape as html_escape
+
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QThread, QDate
 from PySide6.QtGui import QAction, QFont, QIcon, QPalette, QColor
 
@@ -25,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from parser import KakaoLogParser
 from db import get_db, ChatRoom, Message
 from file_storage import get_storage
-from url_extractor import extract_urls_from_text, extract_urls_from_html, save_urls_to_file, deduplicate_urls
+from url_extractor import extract_urls_from_text, extract_urls_from_html, save_urls_to_file, deduplicate_urls, merge_urls_by_date
 
 logger = logging.getLogger("KakaoSummarizer")
 
@@ -856,7 +858,7 @@ class AllRoomsUrlSyncWorker(QThread):
             sys.path.insert(0, str(Path(__file__).parent.parent))
 
             from db.database import Database
-            from url_extractor import extract_urls_from_html, deduplicate_urls
+            from url_extractor import extract_urls_from_html, deduplicate_urls, merge_urls_by_date
             from datetime import date, timedelta
 
             self.progress.emit(5, "전체 채팅방 URL 스캔 중...")
@@ -909,34 +911,10 @@ class AllRoomsUrlSyncWorker(QThread):
                     room_results.append(f"⏭️ {room_name}: URL 없음")
                     continue
 
-                # 기간별 URL 분류
-                def extract_for_period(start_d):
-                    period_urls = {}
-                    for ds, urls in urls_by_date.items():
-                        try:
-                            d = date.fromisoformat(ds)
-                            if d >= start_d:
-                                for url, descs in urls.items():
-                                    if url not in period_urls:
-                                        period_urls[url] = []
-                                    for desc in descs:
-                                        if desc and desc not in period_urls[url]:
-                                            period_urls[url].append(desc)
-                        except Exception:
-                            pass
-                    return period_urls
-
-                urls_recent = deduplicate_urls(extract_for_period(three_days_ago))
-                urls_weekly = deduplicate_urls(extract_for_period(one_week_ago))
-                urls_all = {}
-                for ds, urls in urls_by_date.items():
-                    for url, descs in urls.items():
-                        if url not in urls_all:
-                            urls_all[url] = []
-                        for desc in descs:
-                            if desc and desc not in urls_all[url]:
-                                urls_all[url].append(desc)
-                urls_all = deduplicate_urls(urls_all)
+                # 기간별 URL 분류 (같은 URL은 최신 날짜 설명만 유지)
+                urls_recent = deduplicate_urls(merge_urls_by_date(urls_by_date, three_days_ago))
+                urls_weekly = deduplicate_urls(merge_urls_by_date(urls_by_date, one_week_ago))
+                urls_all = deduplicate_urls(merge_urls_by_date(urls_by_date))
 
                 if urls_all:
                     # DB 저장
@@ -3751,33 +3729,10 @@ class MainWindow(QMainWindow):
                     if urls:
                         urls_by_date[date_str] = urls
 
-            def extract_urls_for_period(start_date):
-                period_urls = {}
-                for ds, urls in urls_by_date.items():
-                    try:
-                        d = date.fromisoformat(ds)
-                        if d >= start_date:
-                            for url, descs in urls.items():
-                                if url not in period_urls:
-                                    period_urls[url] = []
-                                for desc in descs:
-                                    if desc and desc not in period_urls[url]:
-                                        period_urls[url].append(desc)
-                    except Exception:
-                        pass
-                return period_urls
-
-            urls_recent = deduplicate_urls(extract_urls_for_period(three_days_ago))
-            urls_weekly = deduplicate_urls(extract_urls_for_period(one_week_ago))
-            urls_all = {}
-            for ds, urls in urls_by_date.items():
-                for url, descs in urls.items():
-                    if url not in urls_all:
-                        urls_all[url] = []
-                    for desc in descs:
-                        if desc and desc not in urls_all[url]:
-                            urls_all[url].append(desc)
-            urls_all = deduplicate_urls(urls_all)
+            # 같은 URL은 최신 날짜 설명만 유지 (누적 방지)
+            urls_recent = deduplicate_urls(merge_urls_by_date(urls_by_date, three_days_ago))
+            urls_weekly = deduplicate_urls(merge_urls_by_date(urls_by_date, one_week_ago))
+            urls_all = deduplicate_urls(merge_urls_by_date(urls_by_date))
 
             if urls_all:
                 self.db.clear_urls_by_room(room_id)
@@ -3834,19 +3789,22 @@ class MainWindow(QMainWindow):
                 desc_html = ""
                 if descriptions:
                     for desc in descriptions:
+                        # HTML 이스케이프 — 설명에 남은 태그 조각이 레이아웃을 깨는 것 방지 (v2.9.9)
+                        safe_desc = html_escape(desc)
                         # 내용/시사점/활용 키워드를 볼드 처리
-                        if desc.startswith(('내용 —', '시사점 —', '활용 —', '내용—', '시사점—', '활용—')):
-                            key, _, val = desc.partition('—')
+                        if safe_desc.startswith(('내용 —', '시사점 —', '활용 —', '내용—', '시사점—', '활용—')):
+                            key, _, val = safe_desc.partition('—')
                             desc_html += f'<div style="color: #555; font-size: 11px; margin-left: 30px;"><b>{key.strip()}</b> — {val.strip()}</div>'
                         else:
-                            desc_html += f'<div style="color: #444; font-size: 12px; margin-left: 30px; margin-top: 3px;">{desc}</div>'
+                            desc_html += f'<div style="color: #444; font-size: 12px; margin-left: 30px; margin-top: 3px;">{safe_desc}</div>'
                 else:
                     desc_html = '<div style="color: #999; font-size: 11px; margin-left: 30px;">설명 없음</div>'
+                safe_url = html_escape(url, quote=True)
                 html += f"""
                 <div style="margin-bottom: 12px; padding: 10px; background-color: #F9F9F9; border-radius: 8px; border-left: 3px solid {color};">
                     <span style="color: #999; font-size: 11px; margin-right: 8px;">&nbsp;&nbsp;#{i}</span>
-                    <a href="{url}" style="color: #1E88E5; text-decoration: none; word-break: break-all; font-size: 13px;">
-                        {url}
+                    <a href="{safe_url}" style="color: #1E88E5; text-decoration: none; word-break: break-all; font-size: 13px;">
+                        {safe_url}
                     </a>
                     {desc_html}
                 </div>
@@ -4016,37 +3974,10 @@ class MainWindow(QMainWindow):
             self.summary_progress_widget.update_progress(85, "URL 분류 및 중복 제거 중...")
             QApplication.processEvents()
             
-            # 기간별 URL 분류
-            def extract_urls_for_period(start_date: date) -> dict:
-                period_urls = {}
-                for date_str, urls in urls_by_date.items():
-                    try:
-                        d = date.fromisoformat(date_str)
-                        if d >= start_date:
-                            for url, descriptions in urls.items():
-                                if url not in period_urls:
-                                    period_urls[url] = []
-                                for desc in descriptions:
-                                    if desc and desc not in period_urls[url]:
-                                        period_urls[url].append(desc)
-                    except:
-                        pass
-                return period_urls
-            
-            # 3개 기간별 URL
-            urls_recent = deduplicate_urls(extract_urls_for_period(three_days_ago))
-            urls_weekly = deduplicate_urls(extract_urls_for_period(one_week_ago))
-            urls_all = {}
-            for date_str, urls in urls_by_date.items():
-                for url, descriptions in urls.items():
-                    if url not in urls_all:
-                        urls_all[url] = []
-                    for desc in descriptions:
-                        if desc and desc not in urls_all[url]:
-                            urls_all[url].append(desc)
-            
-            # 최종 중복 제거 및 정렬
-            urls_all = deduplicate_urls(urls_all)
+            # 3개 기간별 URL (같은 URL은 최신 날짜 설명만 유지 — 누적 방지)
+            urls_recent = deduplicate_urls(merge_urls_by_date(urls_by_date, three_days_ago))
+            urls_weekly = deduplicate_urls(merge_urls_by_date(urls_by_date, one_week_ago))
+            urls_all = deduplicate_urls(merge_urls_by_date(urls_by_date))
             
             if self._url_sync_cancelled:
                 return
@@ -4225,7 +4156,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.9.8</p>
+            <p>버전 2.9.9</p>
             <p>카카오톡 대화를 분석하고 AI로 상세 분석하는 도구입니다.</p>
             <p>제작자: 민연홍<br>
             <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>

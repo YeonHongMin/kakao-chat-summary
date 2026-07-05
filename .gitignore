@@ -15,6 +15,7 @@ data/
 output/
 logs/
 upload/
+startup_log.txt
 
 # IDE
 .vscode/

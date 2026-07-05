@@ -3,6 +3,25 @@
 형식: [Semantic Versioning](https://semver.org/)에 가깝게 **주.부.패치**로 표기합니다.  
 이전 버전의 상세 히스토리는 `README.md`의 “변경 이력” 절과 `docs/06-tasks.md`를 참고하세요.
 
+## [2.9.9] — 2026-07-05
+
+### 버그 수정
+
+- **URL 탭 들여쓰기 깨짐 (`src/url_extractor.py`, `src/ui/main_window.py`)**
+  - LLM 상세 분석 HTML의 잘못된 태그(`</nbsp;` 등)가 설명에 남아 URL 탭 렌더링이 밀리던 문제
+  - `_strip_html_to_text()`로 추출 시 태그 조각 제거, 표시 시 `html.escape` 적용
+- **URL 설명 무한 누적 (`src/url_extractor.py`, `src/ui/main_window.py`)**
+  - 같은 URL이 여러 날짜 상세 분석에 등장할 때 설명 블록이 계속 합쳐지던 문제
+  - `merge_urls_by_date()` 도입 — 동일 URL은 **가장 최근 날짜** 설명만 유지 (전체/채팅방/자동 동기화 공통)
+
+### 기타
+
+- `.gitignore`에 `startup_log.txt` 추가
+- `README.md` 데이터 보안 섹션 보강 (LLM 전송·로그 주의)
+- 앱 전반 버전 `2.9.9` (`src/app.py`, About 다이얼로그)
+
+---
+
 ## [2.9.8] — 2026-07-04
 
 ### 추가 및 변경

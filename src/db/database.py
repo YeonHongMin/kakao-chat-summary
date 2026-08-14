@@ -125,6 +125,35 @@ class Database:
                     last_sync_at=r.last_sync_at, created_at=r.created_at
                 ) for r in rooms
             ]
+
+    def get_all_rooms_with_message_counts(self) -> List[tuple]:
+        """모든 채팅방과 메시지 수를 한 번의 쿼리로 조회 (기동 N+1 방지)."""
+        from sqlalchemy import select
+        with self.get_session() as session:
+            msg_count_subq = (
+                select(Message.room_id, func.count(Message.id).label('msg_count'))
+                .group_by(Message.room_id)
+                .subquery()
+            )
+            rows = (
+                session.query(
+                    ChatRoom,
+                    func.coalesce(msg_count_subq.c.msg_count, 0).label('msg_count'),
+                )
+                .outerjoin(msg_count_subq, ChatRoom.id == msg_count_subq.c.room_id)
+                .order_by(func.coalesce(msg_count_subq.c.msg_count, 0).desc())
+                .all()
+            )
+            return [
+                (
+                    ChatRoom(
+                        id=r.id, name=r.name, file_path=r.file_path,
+                        last_sync_at=r.last_sync_at, created_at=r.created_at,
+                    ),
+                    int(count),
+                )
+                for r, count in rows
+            ]
     
     def update_room_sync_time(self, room_id: int):
         """채팅방 동기화 시간 업데이트."""

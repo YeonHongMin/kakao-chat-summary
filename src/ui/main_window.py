@@ -2,6 +2,7 @@
 import sys
 import re
 import logging
+import threading
 from pathlib import Path
 from datetime import datetime, timedelta, date
 from typing import Optional, List, Dict, Any
@@ -448,7 +449,7 @@ class SummaryProgressDialog(QDialog):
         self._is_cancelled = True
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.setText("취소 중...")
-        self.current_label.setText("⏳ 현재 작업 완료 후 취소됩니다...")
+        self.current_label.setText("⏳ 취소 요청됨...")
         self.cancel_requested.emit()
     
     def is_cancelled(self) -> bool:
@@ -544,7 +545,7 @@ class SummaryProgressWidget(QWidget):
     def _on_cancel(self):
         """취소 버튼 클릭."""
         self.cancel_btn.setEnabled(False)
-        self.message_label.setText(f"[{self.room_name}] 취소 중...")
+        self.message_label.setText(f"[{self.room_name}] 취소 요청됨...")
         self.cancel_requested.emit()
 
     @Slot(int, str)
@@ -575,10 +576,10 @@ class DetailSummaryWorker(QThread):
         self.date_str = date_str
         self.llm_provider = llm_provider
         self.storage = get_storage()
-        self._cancelled = False
+        self._cancel_event = threading.Event()
 
     def cancel(self):
-        self._cancelled = True
+        self._cancel_event.set()
 
     def run(self):
         try:
@@ -597,7 +598,7 @@ class DetailSummaryWorker(QThread):
                 self.finished.emit(False, "해당 날짜의 대화 데이터가 없습니다.")
                 return
 
-            if self._cancelled:
+            if self._cancel_event.is_set():
                 self.finished.emit(False, "취소됨")
                 return
 
@@ -608,10 +609,11 @@ class DetailSummaryWorker(QThread):
 
             chat_content = "\n".join(messages)
             result = call_detail_llm(
-                chat_content, self.room_name, self.date_str, self.llm_provider
+                chat_content, self.room_name, self.date_str, self.llm_provider,
+                cancel_event=self._cancel_event,
             )
 
-            if self._cancelled:
+            if result.get("cancelled") or self._cancel_event.is_set():
                 self.finished.emit(False, "취소됨")
                 return
 
@@ -651,10 +653,10 @@ class DetailBatchWorker(QThread):
         self.dates = dates
         self.llm_provider = llm_provider
         self.storage = get_storage()
-        self._cancelled = False
+        self._cancel_event = threading.Event()
 
     def cancel(self):
-        self._cancelled = True
+        self._cancel_event.set()
 
     def run(self):
         try:
@@ -673,7 +675,7 @@ class DetailBatchWorker(QThread):
             skip_count = 0
 
             for i, date_str in enumerate(sorted(self.dates)):
-                if self._cancelled:
+                if self._cancel_event.is_set():
                     msg = f"⚠️ 상세 분석 취소됨 (완료: {success_count}일 / 남은: {len(self.dates) - i}일)"
                     self.finished.emit(True, msg)
                     return
@@ -693,8 +695,14 @@ class DetailBatchWorker(QThread):
 
                 chat_content = "\n".join(messages)
                 result = call_detail_llm(
-                    chat_content, self.room_name, date_str, self.llm_provider
+                    chat_content, self.room_name, date_str, self.llm_provider,
+                    cancel_event=self._cancel_event,
                 )
+
+                if result.get("cancelled") or self._cancel_event.is_set():
+                    msg = f"⚠️ 상세 분석 취소됨 (완료: {success_count}일 / 남은: {len(self.dates) - i}일)"
+                    self.finished.emit(True, msg)
+                    return
 
                 if result["success"]:
                     html_content = wrap_detail_html(
@@ -736,10 +744,10 @@ class AllRoomsDetailWorker(QThread):
         self.rooms = rooms
         self.llm_provider = llm_provider
         self.storage = get_storage()
-        self._cancelled = False
+        self._cancel_event = threading.Event()
 
     def cancel(self):
-        self._cancelled = True
+        self._cancel_event.set()
 
     def run(self):
         try:
@@ -759,7 +767,7 @@ class AllRoomsDetailWorker(QThread):
             results = []  # (room_name, success, skip, fail)
 
             for room_idx, (room_id, room_name) in enumerate(self.rooms):
-                if self._cancelled:
+                if self._cancel_event.is_set():
                     break
 
                 # 이 채팅방에서 상세 분석이 필요한 날짜 (v2.9.0: 원본 데이터 기준)
@@ -778,7 +786,7 @@ class AllRoomsDetailWorker(QThread):
                 room_fail = 0
 
                 for i, date_str in enumerate(sorted(dates_needing)):
-                    if self._cancelled:
+                    if self._cancel_event.is_set():
                         break
 
                     overall = room_idx * 100 // len(self.rooms)
@@ -794,8 +802,12 @@ class AllRoomsDetailWorker(QThread):
 
                     chat_content = "\n".join(messages)
                     result = call_detail_llm(
-                        chat_content, room_name, date_str, self.llm_provider
+                        chat_content, room_name, date_str, self.llm_provider,
+                        cancel_event=self._cancel_event,
                     )
+
+                    if result.get("cancelled") or self._cancel_event.is_set():
+                        break
 
                     if result["success"]:
                         html = wrap_detail_html(
@@ -811,6 +823,9 @@ class AllRoomsDetailWorker(QThread):
                 total_success += room_success
                 total_fail += room_fail
                 results.append((room_name, room_success, 0, room_fail))
+
+                if self._cancel_event.is_set():
+                    break
 
             self.progress.emit(100, "완료!")
 
@@ -828,7 +843,7 @@ class AllRoomsDetailWorker(QThread):
                     lines.append(f"  • {rn}: {' / '.join(parts)}")
 
             lines.append(f"\n합계: ✅ {total_success}일 완료 | ⏭️ {total_skip}일 건너뜀 | ❌ {total_fail}일 실패")
-            if self._cancelled:
+            if self._cancel_event.is_set():
                 lines.append("⚠️ 사용자 취소")
 
             self.finished.emit(True, "\n".join(lines))
@@ -950,6 +965,40 @@ class AllRoomsUrlSyncWorker(QThread):
 
         except Exception as e:
             self.finished.emit(False, f"오류: {str(e)}")
+
+
+class UrlLoadWorker(QThread):
+    """URL 탭 데이터 로드 워커 (DB + 파일 I/O를 UI 스레드 밖에서 수행)."""
+    finished = Signal(int, dict, dict, dict, str)  # room_id, urls_all, urls_recent, urls_weekly, source
+
+    def __init__(self, room_id: int, room_name: str):
+        super().__init__()
+        self.room_id = room_id
+        self.room_name = room_name
+        self.storage = get_storage()
+
+    def run(self):
+        from db.database import Database
+        worker_db = Database()
+        try:
+            urls_all = worker_db.get_urls_by_room(self.room_id)
+            urls_recent = self.storage.load_url_list(self.room_name, "recent")
+            urls_weekly = self.storage.load_url_list(self.room_name, "weekly")
+
+            if urls_all:
+                source = "DB"
+            else:
+                urls_all = self.storage.load_url_list(self.room_name, "all")
+                source = "파일" if urls_all else ""
+
+            self.finished.emit(
+                self.room_id, urls_all, urls_recent, urls_weekly, source
+            )
+        except Exception as e:
+            logger.warning(f"[URL 로드] {self.room_name} 실패: {e}")
+            self.finished.emit(self.room_id, {}, {}, {}, "")
+        finally:
+            worker_db.engine.dispose()
 
 
 class RecoveryWorker(QThread):
@@ -1304,6 +1353,8 @@ class MainWindow(QMainWindow):
         self.detail_worker: Optional[DetailSummaryWorker] = None
         self.detail_batch_worker: Optional[DetailBatchWorker] = None
         self.all_rooms_detail_worker: Optional[AllRoomsDetailWorker] = None
+        self.url_load_worker: Optional[UrlLoadWorker] = None
+        self._url_load_seq: int = 0
         
         # 채팅방 데이터 캐시 — 같은 방 재클릭 시 I/O 스킵
         self._room_cache: dict = {}  # {room_id: {"stats": ..., "loaded": True}}
@@ -1316,7 +1367,8 @@ class MainWindow(QMainWindow):
         self._setup_menu()
         self._setup_statusbar()
         self._setup_tray_icon()
-        self._load_rooms()
+        self._show_room_list_loading("채팅방 목록 로드 중...")
+        QTimer.singleShot(0, self._load_rooms)
     
     def _setup_ui(self):
         """UI 구성."""
@@ -2112,18 +2164,40 @@ class MainWindow(QMainWindow):
         self._statusbar_container.setLayout(statusbar_layout)
         self.statusbar.addWidget(self._statusbar_container, 1)
     
+    def _show_room_list_loading(self, message: str = "로드 중..."):
+        """채팅방 목록 영역에 로딩 표시."""
+        while self.room_list_layout.count() > 1:
+            item = self.room_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        label = QLabel(message)
+        label.setAlignment(Qt.AlignCenter)
+        label.setStyleSheet("color: #888888; padding: 20px;")
+        self.room_list_layout.insertWidget(0, label)
+    
     def _load_rooms(self):
         """채팅방 목록 로드."""
+        self._update_status("채팅방 목록 로드 중...", "working")
+        try:
+            self._load_rooms_impl()
+            self._update_status("준비", "success")
+        except Exception as e:
+            logger.exception("채팅방 목록 로드 실패")
+            self._show_room_list_loading(f"❌ 목록 로드 실패\n{str(e)}")
+            self._update_status("채팅방 목록 로드 실패", "error")
+
+    def _load_rooms_impl(self):
+        """채팅방 목록 DB 조회 및 위젯 생성."""
         # 기존 위젯 제거
         while self.room_list_layout.count() > 1:
             item = self.room_list_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
         
-        # DB에서 채팅방 목록 로드
-        rooms = self.db.get_all_rooms()
+        # DB에서 채팅방 목록 + 메시지 수 (단일 쿼리)
+        rooms_with_counts = self.db.get_all_rooms_with_message_counts()
         
-        if not rooms:
+        if not rooms_with_counts:
             # 채팅방이 없을 때 안내 메시지
             empty_label = QLabel("📁 채팅방을 추가해주세요")
             empty_label.setAlignment(Qt.AlignCenter)
@@ -2131,10 +2205,7 @@ class MainWindow(QMainWindow):
             self.room_list_layout.insertWidget(0, empty_label)
             return
         
-        for room in rooms:
-            # 메시지 수 조회
-            msg_count = self.db.get_message_count_by_room(room.id)
-            
+        for room, msg_count in rooms_with_counts:
             widget = ChatRoomWidget(
                 room_id=room.id,
                 name=room.name,
@@ -2174,8 +2245,16 @@ class MainWindow(QMainWindow):
                 and self._room_cache[room_id].get("loaded")):
             return
 
+        switching_room = self.current_room_id is not None and self.current_room_id != room_id
+        url_tab_active = hasattr(self, 'tab_widget') and self.tab_widget.currentIndex() == 2
+
         self.current_room_id = room_id
         self.current_room_file = file_path
+
+        if switching_room and url_tab_active:
+            self._url_load_seq += 1
+            self._update_status("URL 로드 중...", "working")
+            self._show_url_loading_placeholder()
 
         # 채팅방 통계 로드
         stats = self.db.get_room_stats(room_id)
@@ -3841,11 +3920,11 @@ class MainWindow(QMainWindow):
             # 섹션 1: 최근 3일
             html += generate_url_section("최근 3일", "🔥", sorted_recent, "#E53935", MAX_DISPLAY)
             
-            # 섹션 2: 최근 1주 (제한 없이 모두 표시)
-            html += generate_url_section("최근 1주", "📅", sorted_weekly, "#1E88E5", len(sorted_weekly))
+            # 섹션 2: 최근 1주
+            html += generate_url_section("최근 1주", "📅", sorted_weekly, "#1E88E5", MAX_DISPLAY)
             
-            # 섹션 3: 전체 URL (제한 없이 모두 표시)
-            html += generate_url_section("전체 URL", "📚", sorted_all, "#43A047", len(sorted_all))
+            # 섹션 3: 전체 URL
+            html += generate_url_section("전체 URL", "📚", sorted_all, "#43A047", MAX_DISPLAY)
             
             html += "</div>"
             self.url_browser.setHtml(html)
@@ -3862,6 +3941,38 @@ class MainWindow(QMainWindow):
         
         self._current_url_data = urls_all
     
+    def _show_url_loading_placeholder(self):
+        """URL 탭 로딩 중 플레이스홀더 (방 전환 시 즉시 표시)."""
+        self.url_browser.setHtml("""
+            <div style="text-align: center; padding: 50px; color: #888;">
+                <p style="font-size: 48px;">⏳</p>
+                <p style="font-size: 16px;">URL 로드 중...</p>
+            </div>
+        """)
+        self.url_count_label.setText("로드 중...")
+        self.url_status_label.setText("")
+    
+    def _start_url_load(self, room_id: int, room_name: str):
+        """URL 로드를 백그라운드에서 시작 (UI 스레드 블로킹 없음)."""
+        self._url_load_seq += 1
+        load_seq = self._url_load_seq
+
+        if self.url_load_worker:
+            try:
+                self.url_load_worker.finished.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+
+        worker = UrlLoadWorker(room_id, room_name)
+        self.url_load_worker = worker
+        worker.finished.connect(
+            lambda rid, ua, ur, uw, src: self._on_url_load_finished(
+                load_seq, rid, ua, ur, uw, src
+            )
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+    
     @Slot()
     def _refresh_url_list(self):
         """URL 목록 새로고침 (DB + 파일에서 로드)."""
@@ -3876,34 +3987,35 @@ class MainWindow(QMainWindow):
             self.url_status_label.setText("")
             return
         
-        self._update_status("URL 로드 중...", "working")
-        
         room = self.db.get_room_by_id(self.current_room_id)
         if not room:
             return
-        
-        # 1. DB에서 전체 URL 로드
-        urls_all = self._load_url_from_db()
-        
-        # 2. 파일에서 기간별 URL 로드
-        urls_recent = self.storage.load_url_list(room.name, "recent")
-        urls_weekly = self.storage.load_url_list(room.name, "weekly")
-        
+
+        self._update_status("URL 로드 중...", "working")
+        self._show_url_loading_placeholder()
+        self._start_url_load(self.current_room_id, room.name)
+
+    def _on_url_load_finished(
+        self,
+        load_seq: int,
+        room_id: int,
+        urls_all: Dict[str, List[str]],
+        urls_recent: Dict[str, List[str]],
+        urls_weekly: Dict[str, List[str]],
+        source: str,
+    ):
+        """URL 로드 워커 완료 — 방 전환·중복 요청 결과는 무시."""
+        if load_seq != self._url_load_seq or room_id != self.current_room_id:
+            return
+
         if urls_all:
-            self._display_url_list(urls_all, "DB", urls_recent, urls_weekly)
-            self.url_status_label.setText("(DB)")
+            self._display_url_list(urls_all, source, urls_recent, urls_weekly)
+            self.url_status_label.setText(f"({source})")
             self._update_status("URL 로드 완료", "success")
         else:
-            # DB에 없으면 파일에서 전체 로드
-            urls_all = self.storage.load_url_list(room.name, "all")
-            if urls_all:
-                self._display_url_list(urls_all, "파일", urls_recent, urls_weekly)
-                self.url_status_label.setText("(파일)")
-                self._update_status("URL 로드 완료 (파일)", "success")
-            else:
-                self._display_url_list({}, "", {}, {})
-                self.url_status_label.setText("(동기화 필요)")
-                self._update_status("URL 없음", "info")
+            self._display_url_list({}, "", {}, {})
+            self.url_status_label.setText("(동기화 필요)")
+            self._update_status("URL 없음", "info")
     
     @Slot()
     def _sync_url_from_summaries(self):
@@ -4156,7 +4268,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.9.9</p>
+            <p>버전 2.9.10</p>
             <p>카카오톡 대화를 분석하고 AI로 상세 분석하는 도구입니다.</p>
             <p>제작자: 민연홍<br>
             <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>

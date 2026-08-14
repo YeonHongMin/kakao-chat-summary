@@ -1,6 +1,6 @@
 # 02. Technical Requirements Document (TRD)
 
-## 1. 시스템 아키텍처 (v2.9.8)
+## 1. 시스템 아키텍처 (v2.9.10)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -59,14 +59,15 @@ sys.exit(app.exec())
 ### 2.2 ui/main_window.py
 **역할**: 메인 GUI 윈도우
 
-**주요 클래스** (v2.9.2 기준):
+**주요 클래스** (v2.9.10 기준):
 | 클래스 | 설명 |
 |--------|------|
-| `MainWindow` | 메인 윈도우 (탭, 메뉴, 상태바) |
+| `MainWindow` | 메인 윈도우 (탭, 메뉴, 상태바). 기동 시 `_load_rooms()` QTimer 지연 |
 | `FileUploadWorker` | 파일 업로드 백그라운드 처리 |
-| `DetailSummaryWorker` | 단일 날짜 상세 분석 생성 (QThread) |
-| `DetailBatchWorker` | 다중 날짜 상세 분석 일괄 생성 (QThread) |
-| `AllRoomsDetailWorker` | 전체 채팅방 상세 분석 일괄 생성 (QThread) |
+| `UrlLoadWorker` | URL 탭 DB·파일 로드 (UI 스레드 비블로킹, v2.9.10) |
+| `DetailSummaryWorker` | 단일 날짜 상세 분석 생성 (QThread, `cancel_event` 지원) |
+| `DetailBatchWorker` | 다중 날짜 상세 분석 일괄 생성 (QThread, `cancel_event` 지원) |
+| `AllRoomsDetailWorker` | 전체 채팅방 상세 분석 일괄 생성 (QThread, `cancel_event` 지원) |
 | `AllRoomsUrlSyncWorker` | 전체 채팅방 URL 동기화 (QThread) |
 | `RecoveryWorker` | DB 복구 백그라운드 처리 |
 | `CreateRoomDialog` | 채팅방 생성 다이얼로그 |
@@ -95,6 +96,7 @@ sys.exit(app.exec())
 |--------|------|
 | `create_room(name, file_path=None)` | 채팅방 생성 |
 | `get_all_rooms()` | 채팅방 목록 (메시지 수 내림차순) |
+| `get_all_rooms_with_message_counts()` | 채팅방 + 메시지 수 단일 쿼리 (기동 N+1 방지, v2.9.10) |
 | `get_room_by_id(room_id)` | 채팅방 조회 |
 | `get_room_by_name(name)` | 이름으로 채팅방 조회 |
 | `get_room_stats(room_id)` | 채팅방 통계 조회 |

@@ -98,6 +98,12 @@
 
 ## 4. 버전 히스토리
 
+### v2.9.10 (2026-08-14)
+- **기동**: `get_all_rooms_with_message_counts()`, QTimer 지연 `_load_rooms`, 로딩 플레이스홀더
+- **URL 탭**: `UrlLoadWorker`, 섹션당 50개 렌더 제한, 로드 중 방 전환 UI 블로킹 제거
+- **상세 분석 취소**: `call_detail_llm(cancel_event=...)`, API·재시도 대기 중 즉시 취소
+- **start_background.ps1**: python/pythonw 중복 종료, `logs/startup_stderr.txt`
+
 ### v2.9.9 (2026-07-05)
 - **URL 탭**: `_strip_html_to_text`, `merge_urls_by_date`, HTML 이스케이프 렌더링
 - **보안 문서**: README 데이터 보안, `startup_log.txt` gitignore

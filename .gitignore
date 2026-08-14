@@ -1,21 +1,20 @@
 # Python
 __pycache__/
 *.py[cod]
-*.pyo
+*$py.class
+*.so
+.Python
 *.egg-info/
 dist/
 build/
 
-# Environment
-.env.local
-.env
+# Virtual Environment
+venv/
+.venv/
+env/
 
-# Data (사용자 데이터)
-data/
-output/
-logs/
-upload/
-startup_log.txt
+# Claude/Cursor local
+.claude/
 
 # IDE
 .vscode/
@@ -26,15 +25,54 @@ startup_log.txt
 # OS
 .DS_Store
 Thumbs.db
+nul
 
-# Backup
+# Environment variables (keep example)
+.env
+.env.local
+!env.local.example
+
+# Data directory - keep folder structure, ignore contents
+data/*
+!data/.gitkeep
+!data/db/
+!data/original/
+!data/summary/
+!data/url/
+!data/backup/
+data/db/*
+data/original/*
+data/summary/*
+data/url/*
+data/backup/*
+!data/db/.gitkeep
+!data/original/.gitkeep
+!data/summary/.gitkeep
+!data/url/.gitkeep
+
+# Logs
+logs/
+*.log
+
+# Upload directory - keep folder, ignore contents
+upload/*
+!upload/.gitkeep
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.pytest_cache
+
+# Temp files
+*.tmp
 *.bak
+*.temp
 
-# Gemini / AI agents
-.gemini/
-.claude/
-.kilo/
-terminals/
-
-# Test (임시)
-test_sync.py
+# SQLite
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3

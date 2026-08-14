@@ -14,8 +14,8 @@
 | **언어** | Python 3.11+ |
 | **GUI** | PySide6 (Qt for Python) |
 | **DB** | SQLite + SQLAlchemy ORM |
-| **버전** | v2.9.9 |
-| **최종 업데이트** | 2026-07-05 |
+| **버전** | v2.9.10 |
+| **최종 업데이트** | 2026-08-14 |
 
 ---
 
@@ -65,10 +65,8 @@ kakao-chat-summary/
 ├── docs/                      # 문서 (01-prd ~ 06-tasks)
 ├── .env.local                 # API 키 (gitignore)
 ├── env.local.example          # API 키 예제
-├── requirements.txt
-├── .gitignore
-├── README.md
-└── CLAUDE.md                  # 이 파일
+├── start_background.ps1         # Windows 백그라운드 기동 (권장)
+├── start_background.sh          # macOS/Linux 백그라운드 기동
 ```
 
 ---
@@ -186,11 +184,12 @@ class URL(Base):
 | `DashboardCard` | 대시보드 통계 카드 (`update_card()` 메서드) |
 | `SummaryProgressWidget` | 상태바 내장 비모달 프로그레스 (아이콘+메시지+프로그레스바+취소) |
 
-### Worker 스레드 (6개)
+### Worker 스레드 (7개)
 | 클래스 | 역할 |
 |--------|------|
 | `FileUploadWorker` | 파일 업로드 및 파싱 |
 | `AllRoomsUrlSyncWorker` | 전체 채팅방 URL 동기화 (상세 분석 HTML에서 추출) |
+| `UrlLoadWorker` | URL 탭 데이터 로드 (DB + 파일 I/O, v2.9.10) |
 | `DetailSummaryWorker` | 단일 날짜 상세 분석 HTML 생성 |
 | `DetailBatchWorker` | 채팅방 내 여러 날짜 상세 분석 일괄 생성 |
 | `AllRoomsDetailWorker` | 전체 채팅방 상세 분석 일괄 생성 |
@@ -222,7 +221,7 @@ class URL(Base):
 - **응답 검증**: finish_reason, 최소 길이, 필수 섹션, 잘림 패턴
 - **추론 내용 제거**: LLM의 `<think>` 태그 및 본문 이전 추론 텍스트 자동 제거
 - **한자/일본어 후처리** (v2.8.2): `hanja` 라이브러리로 한자→한글 독음 변환, 일본어 자동 제거
-- **진행 상황**: 실시간 진행률, 취소 가능
+- **진행 상황**: 실시간 진행률, 취소 가능 (v2.9.10: LLM API 대기 중 즉시 취소)
 
 ### 3. 상세 분석 HTML (유일한 요약 경로, v2.9.0)
 - **프롬프트** (`detail_prompt.py`): 토픽별 심층 분석, URL 모음, 감정/온도 분석, 핵심 시사점
@@ -370,7 +369,10 @@ MIMO_API_KEY=your_key_here
 ## 🚀 실행 방법
 
 ```bash
-# GUI 앱 실행
+# Windows (권장 — Cursor와 분리, 트레이 실행)
+.\start_background.ps1
+
+# 직접 실행 (콘솔)
 python src/app.py
 ```
 
@@ -851,10 +853,18 @@ DB에 데이터가 있어도 파일이 없으면 재수집 대상이며, DB 저�
 
 ---
 
+### v2.9.10 - 기동·URL 탭 성능 개선 (2026-08-14)
+- 🚀 **기동 속도**: 채팅방 목록 N+1 → 단일 쿼리 (`get_all_rooms_with_message_counts`), 창 선표시 + QTimer 비동기 `_load_rooms`
+- 🔗 **URL 탭**: `UrlLoadWorker` 백그라운드 로드, 섹션당 50개 HTML 제한, 로드 중 방 전환 가능 (`worker.wait` 제거)
+- ⏹️ **상세 분석 취소**: `call_detail_llm(cancel_event)` — LLM API·재시도 sleep 중 즉시 중단, 취소된 날짜는 미저장
+- 🛠️ **start_background.ps1**: python/pythonw 중복 프로세스 정리, 백그라운드 stderr → `logs/startup_stderr.txt`
+
+---
+
 ### v2.9.9 - URL 탭 렌더링·설명 누적 수정 (2026-07-05)
 - 🐛 **URL 탭 들여쓰기**: LLM HTML의 `</nbsp;` 등 깨진 태그 → `_strip_html_to_text()` + `html.escape` 렌더링
 - 🐛 **URL 설명 누적**: `merge_urls_by_date()` — 동일 URL은 최신 날짜 설명 블록만 유지
 
 ---
 
-*마지막 업데이트: 2026-07-05 | 버전: v2.9.9*
+*마지막 업데이트: 2026-08-14 | 버전: v2.9.10*

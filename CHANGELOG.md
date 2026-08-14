@@ -3,6 +3,29 @@
 형식: [Semantic Versioning](https://semver.org/)에 가깝게 **주.부.패치**로 표기합니다.  
 이전 버전의 상세 히스토리는 `README.md`의 “변경 이력” 절과 `docs/06-tasks.md`를 참고하세요.
 
+## [2.9.10] — 2026-08-14
+
+### 성능 및 UX
+
+- **기동 속도 (`src/ui/main_window.py`, `src/db/database.py`)**
+  - 채팅방 목록 DB 조회 N+1 제거 — `get_all_rooms_with_message_counts()` 단일 쿼리
+  - `MainWindow` 생성 시 `_load_rooms()`를 `QTimer`로 지연 — **창을 먼저 표시**하고 목록은 비동기 로드
+  - 기동 중 "채팅방 목록 로드 중..." 플레이스홀더 표시
+- **URL 탭 (`src/ui/main_window.py`)**
+  - `UrlLoadWorker` — DB·파일 I/O를 UI 스레드 밖에서 수행
+  - 섹션당 최대 50개 URL만 HTML 렌더링 (1주·전체 포함)
+  - URL 로드 중 방 전환 시 UI 블로킹 제거 (`worker.wait()` 제거, 시퀀스로 stale 결과 무시)
+- **상세 분석 취소 (`src/detail_prompt.py`, `src/ui/main_window.py`)**
+  - `call_detail_llm()`에 `cancel_event` — API 대기·재시도 sleep 중 즉시 취소 (기존: 현재 날짜 LLM 호출 완료까지 대기)
+  - `DetailSummaryWorker` / `DetailBatchWorker` / `AllRoomsDetailWorker`에 `threading.Event` 연동
+
+### 기타
+
+- **`start_background.ps1`**: 기동 전 `python`/`pythonw` 앱 프로세스 모두 정리, `logs/startup_stderr.txt`에 stderr 기록
+- 앱 전반 버전 `2.9.10` (`src/app.py`, About 다이얼로그)
+
+---
+
 ## [2.9.9] — 2026-07-05
 
 ### 버그 수정

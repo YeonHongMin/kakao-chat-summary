@@ -10,8 +10,9 @@ import re
 import time
 import json
 import logging
+import threading
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 import hanja
 import requests
@@ -306,8 +307,53 @@ def _truncate_input_text(text: str, provider_info, log_prefix: str) -> str:
     return text
 
 
+def _is_cancelled(cancel_event: Optional[threading.Event]) -> bool:
+    return cancel_event is not None and cancel_event.is_set()
+
+
+def _sleep_interruptible(seconds: float, cancel_event: Optional[threading.Event]) -> bool:
+    """대기. True면 취소됨."""
+    if seconds <= 0:
+        return _is_cancelled(cancel_event)
+    if cancel_event is None:
+        time.sleep(seconds)
+        return False
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if cancel_event.is_set():
+            return True
+        time.sleep(min(0.25, deadline - time.time()))
+    return False
+
+
+def _post_with_cancel(url: str, cancel_event: Optional[threading.Event], **kwargs):
+    """requests.post를 취소 가능하게 실행. 취소 시 None."""
+    if _is_cancelled(cancel_event):
+        return None
+
+    result: Dict[str, Any] = {"response": None, "error": None}
+
+    def _do_post():
+        try:
+            result["response"] = requests.post(url, **kwargs)
+        except Exception as e:
+            result["error"] = e
+
+    thread = threading.Thread(target=_do_post, daemon=True)
+    thread.start()
+    while thread.is_alive():
+        if _is_cancelled(cancel_event):
+            return None
+        thread.join(timeout=0.25)
+
+    if result["error"] is not None:
+        raise result["error"]
+    return result["response"]
+
+
 def call_detail_llm(text: str, room_name: str, date_str: str,
-                    provider: str = "minimax") -> Dict[str, Any]:
+                    provider: str = "minimax",
+                    cancel_event: Optional[threading.Event] = None) -> Dict[str, Any]:
     """
     상세 분석을 위한 LLM API 호출.
 
@@ -330,13 +376,17 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
 
     _logpfx = f"[{room_name} | {date_str}]"
 
+    if _is_cancelled(cancel_event):
+        return {"success": False, "error": "취소됨", "cancelled": True}
+
     # ChatGPT Rate Limit
     if provider == "chatgpt":
         elapsed = time.time() - _last_chatgpt_request_time
         if elapsed < _CHATGPT_RATE_LIMIT_DELAY and _last_chatgpt_request_time > 0:
             wait_time = _CHATGPT_RATE_LIMIT_DELAY - elapsed
             logger.info(f"{_logpfx} [Detail/ChatGPT] Rate Limit 대기 {wait_time:.1f}s...")
-            time.sleep(wait_time)
+            if _sleep_interruptible(wait_time, cancel_event):
+                return {"success": False, "error": "취소됨", "cancelled": True}
 
     # 입력 컨텍스트 초과 방지
     text = _truncate_input_text(text, provider_info, _logpfx)
@@ -372,6 +422,9 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
     retry_delay = 2
 
     for attempt in range(max_retries):
+        if _is_cancelled(cancel_event):
+            return {"success": False, "error": "취소됨", "cancelled": True}
+
         request_start = None
         try:
             logger.info(f"{_logpfx} [Detail/{provider_info.name}] 요청 전송... (시도 {attempt + 1}/{max_retries})")
@@ -380,12 +433,16 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
             if provider == "chatgpt":
                 _last_chatgpt_request_time = time.time()
 
-            response = requests.post(
+            response = _post_with_cancel(
                 provider_info.api_url,
+                cancel_event,
                 headers=headers,
                 json=payload,
-                timeout=(60, config.api_timeout)
+                timeout=(60, config.api_timeout),
             )
+            if response is None:
+                logger.info(f"{_logpfx} [Detail/{provider_info.name}] ⏹️ 취소됨")
+                return {"success": False, "error": "취소됨", "cancelled": True}
 
             elapsed = time.time() - request_start
 
@@ -409,7 +466,8 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                         f"{_logpfx} [Detail/{provider_info.name}] API 오류 응답 ({elapsed:.0f}초): {error_msg}"
                     )
                     if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
+                        if _sleep_interruptible(retry_delay, cancel_event):
+                            return {"success": False, "error": "취소됨", "cancelled": True}
                         retry_delay *= 2
                         continue
                     logger.info(
@@ -430,7 +488,8 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                     error_msg = f"예상과 다른 응답 형식: keys={sorted(data.keys())}"
                     logger.warning(f"{_logpfx} [Detail/{provider_info.name}] {error_msg}")
                     if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
+                        if _sleep_interruptible(retry_delay, cancel_event):
+                            return {"success": False, "error": "취소됨", "cancelled": True}
                         retry_delay *= 2
                         continue
                     logger.info(
@@ -470,7 +529,8 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                 if not validation["valid"]:
                     logger.warning(f"{_logpfx} [Detail/{provider_info.name}] ⚠️ 응답 검증 실패 ({elapsed:.0f}초): {validation['reason']}")
                     if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
+                        if _sleep_interruptible(retry_delay, cancel_event):
+                            return {"success": False, "error": "취소됨", "cancelled": True}
                         retry_delay *= 2
                         continue
                     logger.info(
@@ -485,7 +545,8 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
 
             elif response.status_code >= 500:
                 logger.warning(f"{_logpfx} API Error {response.status_code}. 재시도 대기 {retry_delay}s...")
-                time.sleep(retry_delay)
+                if _sleep_interruptible(retry_delay, cancel_event):
+                    return {"success": False, "error": "취소됨", "cancelled": True}
                 retry_delay *= 2
                 continue
             else:
@@ -497,7 +558,8 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
 
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
             logger.warning(f"{_logpfx} Network Error: {e}. 재시도 대기 {retry_delay}s...")
-            time.sleep(retry_delay)
+            if _sleep_interruptible(retry_delay, cancel_event):
+                return {"success": False, "error": "취소됨", "cancelled": True}
             retry_delay *= 2
             continue
         except Exception as e:

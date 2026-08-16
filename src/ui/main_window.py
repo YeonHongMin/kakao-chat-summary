@@ -32,6 +32,13 @@ from url_extractor import extract_urls_from_text, extract_urls_from_html, save_u
 
 logger = logging.getLogger("KakaoSummarizer")
 
+# 채팅방 목록 정렬 (value → UI 라벨)
+ROOM_SORT_OPTIONS: List[tuple] = [
+    ("count", "메시지 수"),
+    ("updated", "최신 업데이트"),
+    ("name", "이름순"),
+]
+
 
 def _apply_text_browser_selection_palette(browser: QTextBrowser) -> None:
     """드래그 선택 시 시스템 파란색·링크 색이 겹쳐 글자가 사라지는 현상 방지."""
@@ -1412,6 +1419,7 @@ class MainWindow(QMainWindow):
         
         # 채팅방 데이터 캐시 — 같은 방 재클릭 시 I/O 스킵
         self._room_cache: dict = {}  # {room_id: {"stats": ..., "loaded": True}}
+        self._room_sort_mode: str = "count"
         
         # 탭 지연 로딩용 플래그
         self._needs_date_update: bool = False
@@ -1445,17 +1453,56 @@ class MainWindow(QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
         
-        # 헤더
+        # 헤더 (제목 + 정렬)
+        header_row = QWidget()
+        header_row.setStyleSheet("background-color: #FEE500;")
+        header_layout = QHBoxLayout(header_row)
+        header_layout.setContentsMargins(15, 12, 10, 12)
+        header_layout.setSpacing(8)
+
         header = QLabel("💬 채팅방")
         header.setObjectName("chatListTitle")
         header.setStyleSheet("""
             font-size: 18px;
             font-weight: bold;
             color: #191919;
-            padding: 15px;
-            background-color: #FEE500;
+            background-color: transparent;
         """)
-        left_layout.addWidget(header)
+        header_layout.addWidget(header)
+        header_layout.addStretch()
+
+        self.room_sort_combo = QComboBox()
+        for value, label in ROOM_SORT_OPTIONS:
+            self.room_sort_combo.addItem(label, value)
+        self.room_sort_combo.setFixedWidth(118)
+        self.room_sort_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #3C1E1E;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-size: 12px;
+            }
+            QComboBox:hover {
+                background-color: #5C3E3E;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 22px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #FFFFFF;
+                color: #191919;
+                selection-background-color: #FEE500;
+                selection-color: #191919;
+                border: 1px solid #E0E0E0;
+            }
+        """)
+        self.room_sort_combo.currentIndexChanged.connect(self._on_room_sort_changed)
+        header_layout.addWidget(self.room_sort_combo)
+
+        left_layout.addWidget(header_row)
         
         # 채팅방 목록
         self.room_list_widget = QWidget()
@@ -2240,6 +2287,31 @@ class MainWindow(QMainWindow):
             self._show_room_list_loading(f"❌ 목록 로드 실패\n{str(e)}")
             self._update_status("채팅방 목록 로드 실패", "error")
 
+    def _sort_rooms_with_counts(
+        self, rooms_with_counts: List[tuple], sort_mode: str
+    ) -> List[tuple]:
+        """채팅방 목록 정렬."""
+        if sort_mode == "name":
+            return sorted(rooms_with_counts, key=lambda x: x[0].name)
+        if sort_mode == "updated":
+            return sorted(
+                rooms_with_counts,
+                key=lambda x: x[0].last_sync_at or datetime.min,
+                reverse=True,
+            )
+        # 기본: 메시지 수 내림차순
+        return sorted(rooms_with_counts, key=lambda x: x[1], reverse=True)
+
+    @Slot()
+    def _on_room_sort_changed(self, index: int):
+        """정렬 변경 시 목록만 다시 그립니다."""
+        if index < 0:
+            return
+        self._room_sort_mode = self.room_sort_combo.currentData()
+        self._load_rooms_impl()
+        if self.current_room_id:
+            self._highlight_selected_room(self.current_room_id)
+
     def _load_rooms_impl(self):
         """채팅방 목록 DB 조회 및 위젯 생성."""
         # 기존 위젯 제거
@@ -2250,6 +2322,9 @@ class MainWindow(QMainWindow):
         
         # DB에서 채팅방 목록 + 메시지 수 (단일 쿼리)
         rooms_with_counts = self.db.get_all_rooms_with_message_counts()
+        rooms_with_counts = self._sort_rooms_with_counts(
+            rooms_with_counts, self._room_sort_mode
+        )
         
         if not rooms_with_counts:
             # 채팅방이 없을 때 안내 메시지
@@ -3492,7 +3567,11 @@ class MainWindow(QMainWindow):
         llm_combo = QComboBox()
         llm_combo.setStyleSheet("QComboBox { padding: 8px 12px; font-size: 13px; border: 2px solid #E0E0E0; border-radius: 6px; }")
 
-        llm_flags = {"glm": "🇨🇳", "chatgpt": "🇺🇸", "minimax": "🇨🇳", "perplexity": "🇺🇸", "grok": "🇺🇸", "qwen-or": "🇨🇳", "qwen-kilo": "🇨🇳", "ollama": "🖥️"}
+        llm_flags = {
+            "glm": "🇨🇳", "chatgpt": "🇺🇸", "minimax": "🇨🇳", "deepseek": "🇨🇳",
+            "perplexity": "🇺🇸", "grok": "🇺🇸", "qwen-or": "🇨🇳", "qwen-kilo": "🇨🇳",
+            "mimo": "🇨🇳", "ollama": "🖥️",
+        }
         default_key = config.DEFAULT_PROVIDER
         preferred = (
             config.current_provider
@@ -4410,7 +4489,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.9.11</p>
+            <p>버전 2.9.13</p>
             <p>카카오톡 대화를 분석하고 AI로 상세 분석하는 도구입니다.</p>
             <p>제작자: 민연홍<br>
             <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>

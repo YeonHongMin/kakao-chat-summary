@@ -751,7 +751,9 @@ class FileStorage:
 
             jobs: List[Tuple[Path, Path]] = []
 
-            db_source = self.base_dir / "db" / "chat_history.db"
+            from db.database import resolve_chat_db_path
+
+            db_source = Path(resolve_chat_db_path())
             if db_source.exists():
                 db_backup_dir = backup_dir / "db"
                 jobs.append((db_source, db_backup_dir / "chat_history.db"))
@@ -946,14 +948,16 @@ class FileStorage:
                         shutil.copytree(src, base_dir)
                 
                 # DB 복원 (메인 파일 + WAL/SHM을 세트로 교체)
+                from db.database import resolve_chat_db_path
+
                 db_src = backup_path / "db" / "chat_history.db"
                 if db_src.exists():
-                    db_dir = self.base_dir / "db"
+                    db_dst = Path(resolve_chat_db_path())
+                    db_dir = db_dst.parent
                     db_dir.mkdir(parents=True, exist_ok=True)
-                    db_dst = db_dir / "chat_history.db"
 
                     for suffix in ("", "-wal", "-shm"):
-                        leftover = db_dir / f"chat_history.db{suffix}"
+                        leftover = db_dir / f"{db_dst.name}{suffix}"
                         if leftover.exists():
                             try:
                                 leftover.unlink()
@@ -964,7 +968,7 @@ class FileStorage:
                     for suffix in ("-wal", "-shm"):
                         aux_src = backup_path / "db" / f"chat_history.db{suffix}"
                         if aux_src.exists():
-                            shutil.copy2(aux_src, db_dir / f"chat_history.db{suffix}")
+                            shutil.copy2(aux_src, db_dir / f"{db_dst.name}{suffix}")
                 
                 print(f"✅ 전체 복원 완료: {backup_path}")
             

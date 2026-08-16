@@ -98,6 +98,15 @@
 
 ## 4. 버전 히스토리
 
+### v2.9.13 (2026-08-16)
+- **NFS SQLite**: 네트워크 경로 `journal_mode=DELETE`, `CHAT_DB_PATH`/`SQLITE_JOURNAL_MODE` 선택 env
+- **DeepSeek 출력**: `max_tokens` 필드 수정, `max_tokens_api_field` 예방 (MiniMax/MiMo/DeepSeek)
+- **채팅방 정렬**: 메시지 수 / 최신 업데이트 / 이름순 (`main_window.py`)
+- **문서**: `docs/unreleased-changes.md`
+
+### v2.9.12 (2026-08-16)
+- **DeepSeek V4 Flash**: `deepseek` 제공자, `thinking: disabled`, `DEEPSEEK_API_KEY`
+
 ### v2.9.11 (2026-08-16)
 - **백업**: `BackupWorker` 비동기 복사, 상태바 진행률/취소
 - **복원 안전**: `_busy_guard`(백업·복원·복구), 전체 복원 시 WAL/SHM 정리 + `reset_db()`

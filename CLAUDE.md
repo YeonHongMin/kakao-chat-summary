@@ -14,7 +14,7 @@
 | **언어** | Python 3.11+ |
 | **GUI** | PySide6 (Qt for Python) |
 | **DB** | SQLite + SQLAlchemy ORM |
-| **버전** | v2.9.11 |
+| **버전** | v2.9.12 |
 | **최종 업데이트** | 2026-08-16 |
 
 ---
@@ -216,7 +216,7 @@ class URL(Base):
 - 파일 업로드 (기본 디렉터리: `upload/`)
 
 ### 2. LLM 상세 분석 생성 (v2.9.0: 기본 요약 제거, 상세 분석 전용)
-- **지원 LLM**: MiniMax (MiniMax-M3, **기본**), Z.AI GLM (**glm-5.2**, 1M context), OpenAI GPT-4o-mini, Perplexity (sonar), Grok, OpenRouter, Kilo, Xiaomi MiMo (mimo-v2.5-pro), Ollama
+- **지원 LLM**: MiniMax (MiniMax-M3, **기본**), **DeepSeek V4 Flash**, Z.AI GLM (**glm-5.2**, 1M context), OpenAI GPT-4o-mini, Perplexity (sonar), Grok, OpenRouter, Kilo, Xiaomi MiMo (mimo-v2.5-pro), Ollama
   - *제약사항*: 컨텍스트가 작은 모델은 `max_input_chars`/`max_tokens` 안전 가드 적용 (공식 컨텍스트 − 출력 예약 × 1.5 chars/token). Grok/OpenRouter/Kilo/Ollama는 기본 무제한(0).
 - **분석 옵션**: 분석 필요한 날짜만 (기본), 오늘, 어제~오늘, 엇그제~오늘, 전체 일자 + 이미 분석된 날짜 건너뛰기 체크박스
 - **응답 검증**: finish_reason, 최소 길이, 필수 섹션, 잘림 패턴
@@ -340,7 +340,7 @@ save_urls_to_file(urls_dict, filepath) -> bool
 
 ### src/full_config.py - Config 클래스
 ```python
-# LLM 제공자 (glm, chatgpt, minimax, perplexity, grok, qwen-or, qwen-kilo, mimo, ollama)
+# LLM 제공자 (glm, chatgpt, minimax, deepseek, perplexity, grok, qwen-or, qwen-kilo, mimo, ollama)
 LLM_PROVIDERS = { ... }
 
 get_api_key(provider) -> str
@@ -854,6 +854,9 @@ DB에 데이터가 있어도 파일이 없으면 재수집 대상이며, DB 저�
 
 ---
 
+### v2.9.12 - DeepSeek V4 Flash LLM (2026-08-16)
+- 🆕 **DeepSeek V4 Flash**: `deepseek` 제공자 (`DEEPSEEK_API_KEY`, 1M context, thinking disabled)
+
 ### v2.9.11 - 백업 진행률 및 복원 정합성 (2026-08-16)
 - 💾 **백업 진행률**: `BackupWorker` 파일 단위 복사, 상태바 프로그레스·취소
 - 🛡️ **동시 실행 방지**: `_busy_guard` — 백업/복원/DB 복구/누락 채팅방 추가
@@ -876,4 +879,4 @@ DB에 데이터가 있어도 파일이 없으면 재수집 대상이며, DB 저�
 
 ---
 
-*마지막 업데이트: 2026-08-16 | 버전: v2.9.11*
+*마지막 업데이트: 2026-08-16 | 버전: v2.9.12*

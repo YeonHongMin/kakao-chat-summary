@@ -1,5 +1,7 @@
 """Database connection and session management."""
+import logging
 import os
+import sys
 from pathlib import Path
 from datetime import datetime, date, time
 from typing import Optional, List, Dict, Any
@@ -10,44 +12,123 @@ from sqlalchemy.orm import sessionmaker, Session
 
 from .models import Base, ChatRoom, Message, Summary, SyncLog, URL
 
+_logger = logging.getLogger("KakaoSummarizer")
+_env_loaded = False
+
+
+def _load_env_local_once() -> None:
+    """`.env.local`을 한 번만 로드합니다 (`CHAT_DB_PATH` 등 DB 설정용)."""
+    global _env_loaded
+    if _env_loaded:
+        return
+    _env_loaded = True
+    try:
+        from dotenv import load_dotenv
+
+        project_root = Path(__file__).parent.parent.parent
+        env_local = project_root / ".env.local"
+        env_file = project_root / ".env"
+        if env_local.exists():
+            load_dotenv(env_local, override=True)
+        elif env_file.exists():
+            load_dotenv(env_file, override=True)
+    except ImportError:
+        pass
+
+
+def _is_network_path(path: Path) -> bool:
+    """UNC·매핑된 네트워크 드라이브 등 NFS/SMB 경로 여부."""
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+
+    path_str = str(resolved)
+    if path_str.startswith("\\\\") or path_str.startswith("//"):
+        return True
+
+    if sys.platform == "win32":
+        drive = os.path.splitdrive(path_str)[0]
+        if drive:
+            import ctypes
+
+            DRIVE_REMOTE = 4
+            return ctypes.windll.kernel32.GetDriveTypeW(drive + "\\") == DRIVE_REMOTE
+    return False
+
+
+def resolve_chat_db_path(db_path: Optional[str] = None) -> str:
+    """실제 SQLite DB 파일 경로 (공유 NFS 기본값 유지, `CHAT_DB_PATH`로만 개별 변경)."""
+    _load_env_local_once()
+
+    if db_path is not None:
+        p = Path(db_path).expanduser()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return str(p.resolve())
+
+    custom = os.getenv("CHAT_DB_PATH", "").strip()
+    if custom:
+        p = Path(custom).expanduser()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return str(p.resolve())
+
+    project_root = Path(__file__).parent.parent.parent
+    db_dir = project_root / "data" / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    return str((db_dir / "chat_history.db").resolve())
+
+
+def resolve_sqlite_journal_mode(db_path: str) -> str:
+    """저널 모드: 네트워크 경로는 DELETE(기본), 로컬은 WAL. `SQLITE_JOURNAL_MODE`로 강제 가능."""
+    explicit = os.getenv("SQLITE_JOURNAL_MODE", "").strip().upper()
+    allowed = {"WAL", "DELETE", "TRUNCATE", "OFF", "MEMORY", "PERSIST"}
+    if explicit in allowed:
+        return explicit
+    if _is_network_path(Path(db_path)):
+        return "DELETE"
+    return "WAL"
+
 
 class Database:
     """SQLite 데이터베이스 관리 클래스."""
     
     def __init__(self, db_path: Optional[str] = None):
-        if db_path is None:
-            # 기본 경로: 프로젝트 루트의 data/db/chat_history.db
-            project_root = Path(__file__).parent.parent.parent
-            db_dir = project_root / "data" / "db"
-            db_dir.mkdir(parents=True, exist_ok=True)
-            db_path = str(db_dir / "chat_history.db")
-        
-        self.db_path = db_path
-        
+        self.db_path = resolve_chat_db_path(db_path)
+        self.journal_mode = resolve_sqlite_journal_mode(self.db_path)
+        on_network = _is_network_path(Path(self.db_path))
+
         # SQLite 최적화 설정
         self.engine = create_engine(
-            f"sqlite:///{db_path}", 
+            f"sqlite:///{self.db_path}",
             echo=False,
             connect_args={
                 "check_same_thread": False,
                 "timeout": 30
             }
         )
-        
-        # WAL 모드 및 성능 최적화
+
+        journal_mode = self.journal_mode
+        synchronous = "FULL" if on_network and journal_mode != "WAL" else "NORMAL"
+
         from sqlalchemy import event
-        
+
         @event.listens_for(self.engine, "connect")
         def set_sqlite_pragma(dbapi_connection, connection_record):
             cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute(f"PRAGMA journal_mode={journal_mode}")
+            cursor.execute(f"PRAGMA synchronous={synchronous}")
             cursor.execute("PRAGMA cache_size=10000")
             cursor.execute("PRAGMA temp_store=MEMORY")
             cursor.close()
-        
+
+        if on_network and journal_mode == "DELETE":
+            _logger.info(
+                f"SQLite: 네트워크 경로 감지 → journal_mode=DELETE "
+                f"(경로: {self.db_path})"
+            )
+
         self.SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)
-        
+
         # 테이블 생성
         Base.metadata.create_all(self.engine)
     
@@ -141,7 +222,6 @@ class Database:
                     func.coalesce(msg_count_subq.c.msg_count, 0).label('msg_count'),
                 )
                 .outerjoin(msg_count_subq, ChatRoom.id == msg_count_subq.c.room_id)
-                .order_by(func.coalesce(msg_count_subq.c.msg_count, 0).desc())
                 .all()
             )
             return [
@@ -154,7 +234,7 @@ class Database:
                 )
                 for r, count in rows
             ]
-    
+
     def update_room_sync_time(self, room_id: int):
         """채팅방 동기화 시간 업데이트."""
         with self.get_session() as session:
@@ -429,24 +509,27 @@ _db_path: Optional[str] = None
 def get_db(db_path: Optional[str] = None, force_new: bool = False) -> Database:
     """데이터베이스 인스턴스 반환."""
     global _db_instance, _db_path
-    
-    # 새 인스턴스 강제 생성
+
     if force_new:
         _db_instance = Database(db_path)
-        _db_path = db_path
+        _db_path = _db_instance.db_path
         return _db_instance
-    
-    # 경로가 변경되었으면 새 인스턴스 생성
-    if db_path is not None and db_path != _db_path:
+
+    resolved = (
+        resolve_chat_db_path(db_path)
+        if db_path is None
+        else str(Path(db_path).expanduser().resolve())
+    )
+
+    if db_path is not None and resolved != _db_path:
         _db_instance = Database(db_path)
-        _db_path = db_path
+        _db_path = _db_instance.db_path
         return _db_instance
-    
-    # 기존 인스턴스 재사용
+
     if _db_instance is None:
         _db_instance = Database(db_path)
-        _db_path = db_path
-    
+        _db_path = _db_instance.db_path
+
     return _db_instance
 
 

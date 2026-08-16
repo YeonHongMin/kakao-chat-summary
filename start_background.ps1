@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    카카오톡 대화 분석기 백그라운드 실행 (v2.9.11)
+    카카오톡 대화 분석기 백그라운드 실행 (v2.9.13)
 
 .DESCRIPTION
     pythonw로 GUI 앱을 Cursor와 분리해 실행합니다.

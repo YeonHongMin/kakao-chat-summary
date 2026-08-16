@@ -3,6 +3,52 @@
 형식: [Semantic Versioning](https://semver.org/)에 가깝게 **주.부.패치**로 표기합니다.  
 이전 버전의 상세 히스토리는 `README.md`의 “변경 이력” 절과 `docs/06-tasks.md`를 참고하세요.
 
+## [2.9.13] — 2026-08-16
+
+### 데이터 안전
+
+- **NFS/SMB SQLite 안정화 (`src/db/database.py`)**
+  - 네트워크 경로 감지 시 `journal_mode=DELETE` (기본 DB 경로 `data/db/` 유지, 공유 DB 분리 없음)
+  - 로컬 디스크는 기존처럼 WAL
+  - 선택: `SQLITE_JOURNAL_MODE`, `CHAT_DB_PATH` (개인 PC만, 기본값 변경 없음)
+  - 백업/복원이 실제 DB 경로를 따름 (`file_storage.py`)
+
+### LLM · 상세 분석
+
+- **DeepSeek V4 Flash 출력 잘림 수정**: API는 `max_tokens` 사용 (`max_completion_tokens` 무시 → ~8K 잘림)
+- **제공자별 출력 API 필드 예방** (`max_tokens_api_field`): MiniMax/MiMo `max_completion_tokens`, DeepSeek `max_tokens`
+- 잘림 로그: 요청 한도 필드·값과 `completion_tokens` 함께 기록
+
+### UI
+
+- **채팅방 목록 정렬**: `💬 채팅방` 헤더 옆 콤보 — 메시지 수 / 최신 업데이트 / 이름순
+
+### 문서
+
+- 동일 버전(`2.9.13`) 추가 변경 상세: [`docs/unreleased-changes.md`](unreleased-changes.md)
+
+### 버전 표시
+
+- 앱 전반 버전 `2.9.13` (번호 변경 없음)
+
+---
+
+## [2.9.12] — 2026-08-16
+
+### 기능
+
+- **DeepSeek V4 Flash LLM 제공자 (`deepseek`)**
+  - `full_config.py`: `deepseek-v4-flash`, 1M context, `DEEPSEEK_API_KEY`
+  - `detail_prompt.py`: `thinking: disabled` (기본 thinking ON 대응)
+  - 설정 다이얼로그·상세 분석 LLM 선택 목록에 자동 반영 (`LLM_PROVIDERS`)
+  - *(v2.9.13 추가)* 출력 한도는 `max_tokens` 필드 — 상세는 `docs/unreleased-changes.md`
+
+### 버전 표시
+
+- 앱 전반 버전 `2.9.12` (`src/app.py`, About 다이얼로그)
+
+---
+
 ## [2.9.11] — 2026-08-16
 
 ### UX

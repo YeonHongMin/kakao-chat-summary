@@ -1,6 +1,6 @@
 # 💬 카카오톡 대화 분석기 (KakaoTalk Chat Summarizer)
 
-> **v2.9.11** | 최종 업데이트: 2026-08-16
+> **v2.9.13** | 최종 업데이트: 2026-08-16
 
 카카오톡 대화 내보내기 파일을 AI(LLM)를 활용하여 날짜별로 **상세 분석 HTML**을 생성하는 **데스크톱 GUI 애플리케이션**입니다.
 
@@ -8,7 +8,7 @@
 
 - 🖥️ **데스크톱 GUI**: PySide6 기반 네이티브 앱 (카카오톡 스타일 UI)
 - 🔍 **상세 분석 HTML**: 토픽별 심층 분석 + URL 모음 + 감정 분석을 다크 테마 HTML로 생성
-- 🤖 **다중 LLM 지원**: GLM, OpenAI, MiniMax, Perplexity, Grok, OpenRouter, Kilo, **MiMo**, Ollama
+- 🤖 **다중 LLM 지원**: GLM, OpenAI, MiniMax, **DeepSeek V4 Flash**, Perplexity, Grok, OpenRouter, Kilo, **MiMo**, Ollama
 - 🌐 **전체 채팅방 일괄 처리**: 모든 채팅방 상세 분석/URL 동기화를 한 번에 수행
 - 🔗 **URL 자동 추출**: 상세 분석 HTML에서 공유된 링크를 별도 탭에서 확인
 - 📊 **대시보드**: 채팅방 통계 확인
@@ -44,6 +44,7 @@
 | LLM | 키 | 환경변수 | 모델 | 비고 |
 |-----|-----|----------|------|------|
 | MiniMax | `minimax` | `MINIMAX_API_KEY` | MiniMax-M3 | 입력 ~719K chars / 최대 32,768출력 (**기본, 권장**) |
+| DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` | deepseek-v4-flash | 입력 1.45M chars / 최대 32,768출력 (1M context) |
 | Z.AI GLM | `glm` | `ZAI_API_KEY` | glm-5.2 | 입력 1.45M chars / 최대 32,768출력 (1M context) |
 | OpenAI | `chatgpt` | `OPENAI_API_KEY` | gpt-4o-mini | 입력 ~167K chars / 최대 16,000출력 (⚠️ Rate Limit) |
 | Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | sonar | 입력 ~168K chars / 최대 16,000출력 |
@@ -54,7 +55,7 @@
 | Ollama | `ollama` | (없음) | (OLLAMA_MODEL) | 로컬 실행, 입력 자르기 없음(기본) |
 
 > **💡 LLM 모델 컨텍스트 제약 사항**
-> 대화량이 방대할 경우, **GLM-5.2(1M)**·**MiniMax-M3(512K~1M)**·**MiMo(1M)** 등 장문 컨텍스트 모델 사용을 권장합니다. OpenRouter/Kilo 기본 모델(grok-4.1-fast)은 2M context이며 앱에서 입력 자르기를 하지 않습니다(0).
+> 대화량이 방대할 경우, **GLM-5.2(1M)**·**MiniMax-M3(512K~1M)**·**DeepSeek V4 Flash(1M)**·**MiMo(1M)** 등 장문 컨텍스트 모델 사용을 권장합니다. OpenRouter/Kilo 기본 모델(grok-4.1-fast)은 2M context이며 앱에서 입력 자르기를 하지 않습니다(0).
 
 ---
 
@@ -197,6 +198,10 @@ kakao-chat-summary/
 | `MINIMAX_API_KEY` | LLM별 | MiniMax API 키 (기본 LLM) |
 | `MINIMAX_MAX_TOKENS` | - | MiniMax 최대 출력 (기본: 32768) |
 | `MINIMAX_MAX_INPUT_CHARS` | - | MiniMax 입력 문자 상한 (기본: 718848, 512K context 기준) |
+| `DEEPSEEK_API_KEY` | LLM별 | DeepSeek API 키 |
+| `DEEPSEEK_MODEL` | - | 모델 ID (기본: `deepseek-v4-flash`) |
+| `DEEPSEEK_MAX_TOKENS` | - | DeepSeek 최대 출력 (기본: 32768) |
+| `DEEPSEEK_MAX_INPUT_CHARS` | - | DeepSeek 입력 문자 상한 (기본: 1450848, 1M context 기준) |
 | `PERPLEXITY_API_KEY` | LLM별 | Perplexity API 키 |
 | `PERPLEXITY_MAX_TOKENS` | - | sonar 최대 출력 (기본: 16000) |
 | `PERPLEXITY_MAX_INPUT_CHARS` | - | sonar 입력 문자 상한 (기본: 168000) |
@@ -212,7 +217,7 @@ kakao-chat-summary/
 | `MIMO_API_KEY` | LLM별 | Xiaomi MiMo API 키 |
 | `MIMO_MAX_TOKENS` | - | MiMo 최대 출력 (기본: 32768, API 상한 128K) |
 | `MIMO_MAX_INPUT_CHARS` | - | MiMo 입력 문자 상한 (기본: 1450848, 1M context 기준) |
-| `LLM_PROVIDER` | - | 기본 LLM (`glm`, `chatgpt`, `minimax`, `perplexity`, `grok`, `qwen-or`, `qwen-kilo`, `mimo`, `ollama`) |
+| `LLM_PROVIDER` | - | 기본 LLM (`glm`, `chatgpt`, `minimax`, `deepseek`, `perplexity`, `grok`, `qwen-or`, `qwen-kilo`, `mimo`, `ollama`) |
 | `API_TIMEOUT` | - | API read 타임아웃 초 (기본: 1200, connect: 60) |
 
 ---
@@ -265,6 +270,15 @@ logs/summarizer_20260201.log
 ## 📝 변경 이력
 
 자세한 수정 내역은 [`CHANGELOG.md`](CHANGELOG.md)를 참고하세요.
+
+### v2.9.13 (2026-08-16) - NFS SQLite·LLM 출력·채팅방 정렬
+- 🛡️ **NFS**: 네트워크 드라이브에서 WAL → DELETE (`disk I/O error` 완화, DB 경로 공유 유지)
+- 🐛 **DeepSeek**: `max_tokens` 필드 수정 (~8K 잘림), 제공자별 출력 API 필드 예방
+- 📋 **채팅방 정렬**: 헤더 옆 콤보 — 메시지 수 / 최신 업데이트 / 이름순
+- 📄 상세: `docs/unreleased-changes.md`
+
+### v2.9.12 (2026-08-16) - DeepSeek V4 Flash LLM
+- 🆕 **DeepSeek V4 Flash**: `deepseek` 제공자 (`DEEPSEEK_API_KEY`, 1M context, thinking disabled)
 
 ### v2.9.11 (2026-08-16) - 백업 진행률·복원 정합성
 - 💾 **백업 진행률**: `BackupWorker` 백그라운드 복사, 상태바 프로그레스/취소

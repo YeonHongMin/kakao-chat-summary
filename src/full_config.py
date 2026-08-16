@@ -43,6 +43,9 @@ class LLMProvider:
     reasoning_effort: str = ""  # "high", "medium", "low", "none", "" (미지정)
     max_input_chars: int = 0    # 0 = 무제한. 입력 문자 수 상한
     max_input_bytes: int = 0    # 0 = 무제한. 입력 UTF-8 바이트 상한 (max_input_chars보다 우선)
+    # API별 출력 한도 JSON 필드 (잘못된 필드 → 서버 기본값으로 잘림 방지)
+    max_tokens_api_field: str = "max_tokens"
+    thinking_disabled: bool = False  # thinking 기본 ON API용
 
 
 # 한글 대화 기준 토큰→문자 근사 (Z.AI 문서: 1 token ≈ 1.5 한글자)
@@ -85,6 +88,7 @@ _XAI_MAX_TOKENS = int(os.getenv("XAI_MAX_TOKENS", "16000"))
 _OPENROUTER_MAX_TOKENS = int(os.getenv("OPENROUTER_MAX_TOKENS", "30000"))
 _KILO_MAX_TOKENS = int(os.getenv("KILO_MAX_TOKENS", "30000"))
 _MIMO_MAX_TOKENS = int(os.getenv("MIMO_MAX_TOKENS", "32768"))
+_DEEPSEEK_MAX_TOKENS = int(os.getenv("DEEPSEEK_MAX_TOKENS", "32768"))
 
 
 # 지원하는 LLM 제공자 목록
@@ -119,6 +123,7 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
         model="MiniMax-M3",
         env_key="MINIMAX_API_KEY",
         max_tokens=_MINIMAX_MAX_TOKENS,
+        max_tokens_api_field="max_completion_tokens",
         # 공식 최대 1M tokens, 표준 요금 구간 512K (platform.minimax.io)
         max_input_chars=int(os.getenv(
             "MINIMAX_MAX_INPUT_CHARS",
@@ -135,6 +140,20 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
         max_input_chars=int(os.getenv(
             "PERPLEXITY_MAX_INPUT_CHARS",
             str(_input_chars_from_context(128_000, _PERPLEXITY_MAX_TOKENS)),
+        )),
+    ),
+    "deepseek": LLMProvider(
+        name="DeepSeek V4 Flash",
+        api_url="https://api.deepseek.com/v1/chat/completions",
+        model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+        env_key="DEEPSEEK_API_KEY",
+        max_tokens=_DEEPSEEK_MAX_TOKENS,
+        max_tokens_api_field="max_tokens",
+        thinking_disabled=True,
+        # deepseek-v4-flash: 1M context, 최대 출력 384K tokens (api-docs.deepseek.com)
+        max_input_chars=int(os.getenv(
+            "DEEPSEEK_MAX_INPUT_CHARS",
+            str(_input_chars_from_context(1_000_000, _DEEPSEEK_MAX_TOKENS)),
         )),
     ),
     "grok": LLMProvider(
@@ -168,6 +187,8 @@ LLM_PROVIDERS: Dict[str, LLMProvider] = {
         model="mimo-v2.5-pro",
         env_key="MIMO_API_KEY",
         max_tokens=_MIMO_MAX_TOKENS,
+        max_tokens_api_field="max_completion_tokens",
+        thinking_disabled=True,
         # mimo-v2.5-pro: 1M context, 최대 출력 128K tokens (platform.xiaomimimo.com)
         max_input_chars=int(os.getenv(
             "MIMO_MAX_INPUT_CHARS",

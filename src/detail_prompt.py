@@ -402,18 +402,18 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
     else:
         headers["Authorization"] = f"Bearer {api_key}"
 
+    token_field = provider_info.max_tokens_api_field or "max_tokens"
+
     payload = {
         "model": provider_info.model,
-        "max_tokens": provider_info.max_tokens,
         "temperature": 0.5,
         "messages": [
             {"role": "system", "content": "You are a native South Korean AI assistant. You MUST write your response ONLY in pure Korean (Hangul) and English. You are STRICTLY FORBIDDEN from outputting any Chinese characters (Hanzi/漢字/中文, e.g., 們, 推荐, 暂), Japanese characters (Hiragana/Katakana/Kanji, e.g., なし, が), or Arabic. Translate everything into natural Korean. If there is no data, say '없음'."},
             {"role": "user", "content": prompt}
         ]
     }
-    if provider == "mimo":
-        payload.pop("max_tokens", None)
-        payload["max_completion_tokens"] = provider_info.max_tokens
+    payload[token_field] = provider_info.max_tokens
+    if provider_info.thinking_disabled:
         payload["thinking"] = {"type": "disabled"}
     if provider_info.reasoning_effort:
         payload["reasoning_effort"] = provider_info.reasoning_effort
@@ -498,7 +498,11 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                     return {"success": False, "error": error_msg}
 
                 choice = choices[0]
-                content = choice["message"]["content"]
+                message = choice.get("message") or {}
+                content = message.get("content") or ""
+                # thinking 모드 응답은 reasoning_content에만 올 수 있음 (비활성화 권장)
+                if not content.strip() and message.get("reasoning_content"):
+                    content = message["reasoning_content"]
                 usage = data.get("usage", {})
 
                 # 추론 내용 제거 + 한자/일본어 후처리
@@ -508,8 +512,10 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                 # finish_reason 체크
                 finish_reason = choice.get("finish_reason", "unknown")
                 if finish_reason == "length":
+                    comp_tokens = usage.get("completion_tokens", "?")
                     logger.warning(
-                        f"{_logpfx} [Detail/{provider_info.name}] ⚠️ 응답 잘림 ({elapsed:.0f}초): max_tokens 초과. 잘린 결괏값을 유지합니다."
+                        f"{_logpfx} [Detail/{provider_info.name}] ⚠️ 응답 잘림 ({elapsed:.0f}초): "
+                        f"{token_field}={provider_info.max_tokens} 요청, completion_tokens={comp_tokens}"
                     )
                     logger.info(
                         f"{_logpfx} [Detail/{provider_info.name}] ⚠️ 경고 ({elapsed:.0f}초): 응답이 너무 길어 중간에 잘렸습니다."

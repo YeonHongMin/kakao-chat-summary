@@ -30,9 +30,10 @@
 | Z.AI GLM | glm-5.2 | `ZAI_API_KEY` | 1M context, 장문 분석 |
 | OpenAI | gpt-4o-mini | `OPENAI_API_KEY` | ⚠️ Rate Limit |
 | MiniMax | MiniMax-M3 | `MINIMAX_API_KEY` | **기본, 권장** |
+| DeepSeek | deepseek-v4-flash | `DEEPSEEK_API_KEY` | 1M context, 공식 API |
 | Perplexity | sonar | `PERPLEXITY_API_KEY` | |
 | Grok | grok-4-1-fast-non-reasoning | `XAI_API_KEY` | 입력 자르기 없음(기본) |
-| DeepSeek | qwen-or (OpenRouter) | `OPENROUTER_API_KEY` | 32K 컨텍스트 |
+| OpenRouter | (OPENROUTER_MODEL) | `OPENROUTER_API_KEY` | 기본 grok-4.1-fast |
 | Xiaomi MiMo | mimo-v2.5-pro | `MIMO_API_KEY` | 1M context |
 | Ollama | (OLLAMA_MODEL) | (없음) | 로컬 LLM |
 

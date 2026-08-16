@@ -69,6 +69,10 @@ htmlcov/
 *.bak
 *.temp
 
+# Local review notes (do not publish)
+fix.md
+*.sds-review.md
+
 # SQLite
 *.db
 *.db-journal

@@ -21,8 +21,13 @@ import re
 import hashlib
 from pathlib import Path
 from datetime import datetime, date
-from typing import Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set, Tuple
 from collections import defaultdict
+
+
+class BackupCancelled(Exception):
+    """사용자 요청으로 백업이 중단됨."""
+    pass
 
 
 class FileStorage:
@@ -673,8 +678,52 @@ class FileStorage:
         return result if result else None
     
     # ==================== 백업 기능 ====================
+
+    @staticmethod
+    def _collect_dir_files(src_dir: Path, dst_dir: Path) -> List[Tuple[Path, Path]]:
+        """src_dir 아래 파일을 (원본, 대상) 목록으로 수집."""
+        if not src_dir.exists():
+            return []
+        pairs: List[Tuple[Path, Path]] = []
+        for src_file in src_dir.rglob("*"):
+            if src_file.is_file():
+                pairs.append((src_file, dst_dir / src_file.relative_to(src_dir)))
+        return pairs
+
+    def _copy_backup_files(
+        self,
+        jobs: List[Tuple[Path, Path]],
+        progress_callback: Optional[Callable[[int, str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+        start_pct: int = 5,
+        end_pct: int = 100,
+    ) -> None:
+        """파일 목록을 복사하며 진행률을 보고한다."""
+        import shutil
+
+        total = len(jobs)
+        if total == 0:
+            if progress_callback:
+                progress_callback(end_pct, "복사할 파일이 없습니다")
+            return
+
+        last_pct = -1
+        span = max(end_pct - start_pct, 1)
+        for i, (src_file, dst_file) in enumerate(jobs, 1):
+            if cancel_check and cancel_check():
+                raise BackupCancelled()
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, dst_file)
+            pct = start_pct + int(i * span / total)
+            if progress_callback and (pct != last_pct or i == total or i % 20 == 0):
+                last_pct = pct
+                progress_callback(min(pct, end_pct), f"복사 중... ({i}/{total})")
     
-    def create_full_backup(self) -> Optional[Path]:
+    def create_full_backup(
+        self,
+        progress_callback: Optional[Callable[[int, str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> Optional[Path]:
         """
         전체 백업 생성 (타임스탬프 디렉터리).
         
@@ -682,6 +731,8 @@ class FileStorage:
         - data/db/chat_history.db
         - data/original/ (전체)
         - data/summary/ (전체)
+        - data/url/ (전체)
+        - data/detail_summary/ (전체)
         
         Returns:
             백업 디렉터리 경로 (성공 시) 또는 None (실패 시)
@@ -695,38 +746,39 @@ class FileStorage:
         backup_dir.mkdir(parents=True, exist_ok=True)
         
         try:
-            # 1. DB 파일 백업
+            if progress_callback:
+                progress_callback(2, "백업 대상 파일 집계 중...")
+
+            jobs: List[Tuple[Path, Path]] = []
+
             db_source = self.base_dir / "db" / "chat_history.db"
             if db_source.exists():
                 db_backup_dir = backup_dir / "db"
-                db_backup_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(db_source, db_backup_dir / "chat_history.db")
-                # WAL 파일도 백업 (있으면)
+                jobs.append((db_source, db_backup_dir / "chat_history.db"))
                 wal_source = db_source.parent / "chat_history.db-wal"
                 if wal_source.exists():
-                    shutil.copy2(wal_source, db_backup_dir / "chat_history.db-wal")
+                    jobs.append((wal_source, db_backup_dir / "chat_history.db-wal"))
                 shm_source = db_source.parent / "chat_history.db-shm"
                 if shm_source.exists():
-                    shutil.copy2(shm_source, db_backup_dir / "chat_history.db-shm")
-            
-            # 2. original 디렉터리 백업
-            if self.original_dir.exists():
-                shutil.copytree(self.original_dir, backup_dir / "original")
-            
-            # 3. summary 디렉터리 백업
-            if self.summary_dir.exists():
-                shutil.copytree(self.summary_dir, backup_dir / "summary")
-            
-            # 4. url 디렉터리 백업
-            if self.url_dir.exists():
-                shutil.copytree(self.url_dir, backup_dir / "url")
+                    jobs.append((shm_source, db_backup_dir / "chat_history.db-shm"))
 
-            # 5. detail_summary 디렉터리 백업
+            jobs.extend(self._collect_dir_files(self.original_dir, backup_dir / "original"))
+            jobs.extend(self._collect_dir_files(self.summary_dir, backup_dir / "summary"))
+            jobs.extend(self._collect_dir_files(self.url_dir, backup_dir / "url"))
             if self.detail_dir.exists() and any(self.detail_dir.iterdir()):
-                shutil.copytree(self.detail_dir, backup_dir / "detail_summary")
+                jobs.extend(self._collect_dir_files(self.detail_dir, backup_dir / "detail_summary"))
+
+            self._copy_backup_files(
+                jobs, progress_callback, cancel_check, start_pct=5, end_pct=100
+            )
 
             print(f"✅ 백업 완료: {backup_dir}")
             return backup_dir
+
+        except BackupCancelled:
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir, ignore_errors=True)
+            raise
             
         except Exception as e:
             print(f"❌ 백업 실패: {e}")
@@ -768,7 +820,12 @@ class FileStorage:
         
         return backups
     
-    def backup_room(self, room_name: str) -> Optional[Path]:
+    def backup_room(
+        self,
+        room_name: str,
+        progress_callback: Optional[Callable[[int, str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> Optional[Path]:
         """
         개별 채팅방 백업.
         
@@ -787,28 +844,34 @@ class FileStorage:
         backup_dir.mkdir(parents=True, exist_ok=True)
         
         try:
-            # original 디렉터리 백업
-            original_room = self.original_dir / sanitized
-            if original_room.exists():
-                shutil.copytree(original_room, backup_dir / "original" / sanitized)
-            
-            # summary 디렉터리 백업
-            summary_room = self.summary_dir / sanitized
-            if summary_room.exists():
-                shutil.copytree(summary_room, backup_dir / "summary" / sanitized)
-            
-            # url 디렉터리 백업
-            url_room = self.url_dir / sanitized
-            if url_room.exists():
-                shutil.copytree(url_room, backup_dir / "url" / sanitized)
+            if progress_callback:
+                progress_callback(2, "백업 대상 파일 집계 중...")
 
-            # detail_summary 디렉터리 백업
-            detail_room = self.detail_dir / sanitized
-            if detail_room.exists():
-                shutil.copytree(detail_room, backup_dir / "detail_summary" / sanitized)
+            jobs: List[Tuple[Path, Path]] = []
+            jobs.extend(self._collect_dir_files(
+                self.original_dir / sanitized, backup_dir / "original" / sanitized
+            ))
+            jobs.extend(self._collect_dir_files(
+                self.summary_dir / sanitized, backup_dir / "summary" / sanitized
+            ))
+            jobs.extend(self._collect_dir_files(
+                self.url_dir / sanitized, backup_dir / "url" / sanitized
+            ))
+            jobs.extend(self._collect_dir_files(
+                self.detail_dir / sanitized, backup_dir / "detail_summary" / sanitized
+            ))
+
+            self._copy_backup_files(
+                jobs, progress_callback, cancel_check, start_pct=5, end_pct=100
+            )
 
             print(f"✅ 채팅방 백업 완료: {backup_dir}")
             return backup_dir
+
+        except BackupCancelled:
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir, ignore_errors=True)
+            raise
             
         except Exception as e:
             print(f"❌ 채팅방 백업 실패: {e}")
@@ -828,8 +891,8 @@ class FileStorage:
         """
         rooms = set()
         
-        # original, summary, url 디렉터리에서 채팅방 찾기
-        for subdir in ['original', 'summary', 'url']:
+        # original, summary, url, detail_summary 디렉터리에서 채팅방 찾기
+        for subdir in ['original', 'summary', 'url', 'detail_summary']:
             subdir_path = backup_path / subdir
             if subdir_path.exists():
                 for room_dir in subdir_path.iterdir():
@@ -882,13 +945,26 @@ class FileStorage:
                             shutil.rmtree(base_dir)
                         shutil.copytree(src, base_dir)
                 
-                # DB 복원
+                # DB 복원 (메인 파일 + WAL/SHM을 세트로 교체)
                 db_src = backup_path / "db" / "chat_history.db"
                 if db_src.exists():
-                    db_dst = self.base_dir / "db" / "chat_history.db"
-                    if db_dst.exists():
-                        db_dst.unlink()
+                    db_dir = self.base_dir / "db"
+                    db_dir.mkdir(parents=True, exist_ok=True)
+                    db_dst = db_dir / "chat_history.db"
+
+                    for suffix in ("", "-wal", "-shm"):
+                        leftover = db_dir / f"chat_history.db{suffix}"
+                        if leftover.exists():
+                            try:
+                                leftover.unlink()
+                            except Exception:
+                                pass
+
                     shutil.copy2(db_src, db_dst)
+                    for suffix in ("-wal", "-shm"):
+                        aux_src = backup_path / "db" / f"chat_history.db{suffix}"
+                        if aux_src.exists():
+                            shutil.copy2(aux_src, db_dir / f"chat_history.db{suffix}")
                 
                 print(f"✅ 전체 복원 완료: {backup_path}")
             

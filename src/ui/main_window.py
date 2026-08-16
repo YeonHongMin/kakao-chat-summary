@@ -509,18 +509,22 @@ class SummaryProgressWidget(QWidget):
     """상태바 내장 요약 프로그레스 위젯 (비모달)."""
     cancel_requested = Signal()
 
-    def __init__(self, parent=None, llm_name: str = "LLM", room_name: str = ""):
+    def __init__(self, parent=None, llm_name: str = "LLM", room_name: str = "",
+                 icon: str = "🤖", initial_message: Optional[str] = None,
+                 cancel_tooltip: str = "취소"):
         super().__init__(parent)
         self.room_name = room_name
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(6)
 
-        self.icon_label = QLabel("🤖")
+        self.icon_label = QLabel(icon)
         self.icon_label.setStyleSheet("font-size: 14px;")
         layout.addWidget(self.icon_label)
 
-        self.message_label = QLabel(f"[{room_name}] {llm_name} 요약 중...")
+        self.message_label = QLabel(
+            initial_message or f"[{room_name}] {llm_name} 요약 중..."
+        )
         self.message_label.setStyleSheet("font-size: 12px; color: #191919;")
         layout.addWidget(self.message_label)
 
@@ -534,7 +538,7 @@ class SummaryProgressWidget(QWidget):
         layout.addWidget(self.progress_bar)
 
         self.cancel_btn = QPushButton("❌")
-        self.cancel_btn.setToolTip("요약 취소")
+        self.cancel_btn.setToolTip(cancel_tooltip)
         self.cancel_btn.setFixedSize(24, 24)
         self.cancel_btn.setObjectName("summaryProgressCancelBtn")
         self.cancel_btn.clicked.connect(self._on_cancel)
@@ -1001,6 +1005,55 @@ class UrlLoadWorker(QThread):
             worker_db.engine.dispose()
 
 
+class BackupWorker(QThread):
+    """전체/채팅방 백업 워커."""
+    progress = Signal(int, str)
+    finished = Signal(bool, str)  # (success, path_or_error)
+
+    def __init__(self, mode: str = "full", room_name: Optional[str] = None):
+        super().__init__()
+        self.mode = mode  # "full" | "room"
+        self.room_name = room_name or ""
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        from file_storage import BackupCancelled, get_storage
+
+        storage = get_storage()
+
+        def _progress(pct: int, message: str):
+            self.progress.emit(pct, message)
+
+        def _cancelled() -> bool:
+            return self._cancelled
+
+        try:
+            if self.mode == "room":
+                backup_path = storage.backup_room(
+                    self.room_name,
+                    progress_callback=_progress,
+                    cancel_check=_cancelled,
+                )
+            else:
+                backup_path = storage.create_full_backup(
+                    progress_callback=_progress,
+                    cancel_check=_cancelled,
+                )
+
+            if backup_path:
+                self.progress.emit(100, "완료")
+                self.finished.emit(True, str(backup_path))
+            else:
+                self.finished.emit(False, "백업 중 오류가 발생했습니다.")
+        except BackupCancelled:
+            self.finished.emit(False, "취소됨")
+        except Exception as e:
+            self.finished.emit(False, f"오류: {e}")
+
+
 class RecoveryWorker(QThread):
     """DB 복구 워커 - 파일 저장소에서 DB 복구."""
     progress = Signal(int, str)
@@ -1355,6 +1408,7 @@ class MainWindow(QMainWindow):
         self.all_rooms_detail_worker: Optional[AllRoomsDetailWorker] = None
         self.url_load_worker: Optional[UrlLoadWorker] = None
         self._url_load_seq: int = 0
+        self.backup_worker: Optional[BackupWorker] = None
         
         # 채팅방 데이터 캐시 — 같은 방 재클릭 시 I/O 스킵
         self._room_cache: dict = {}  # {room_id: {"stats": ..., "loaded": True}}
@@ -2737,6 +2791,9 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_recovery(self):
         """DB 복구."""
+        if self._busy_guard("DB 복구"):
+            return
+
         # 확인 다이얼로그
         reply = QMessageBox.question(
             self, "DB 복구",
@@ -2782,6 +2839,9 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_room_recovery(self):
         """파일 디렉터리에서 누락된 채팅방 복구 (비파괴적)."""
+        if self._busy_guard("채팅방 복구"):
+            return
+
         self._update_status("채팅방 복구 스캔 중...", "working")
 
         storage = get_storage()
@@ -2831,9 +2891,55 @@ class MainWindow(QMainWindow):
             f"✅ {created}개 채팅방을 DB에 추가했습니다."
         )
 
+    def _busy_guard(self, title: str = "알림") -> bool:
+        """다른 작업이 진행 중이면 경고 후 True."""
+        is_busy = (
+            self._summary_in_progress
+            or (self.backup_worker and self.backup_worker.isRunning())
+            or (self.recovery_worker and self.recovery_worker.isRunning())
+        )
+        if is_busy:
+            QMessageBox.warning(
+                self, title,
+                "다른 작업이 진행 중입니다.\n완료 후 다시 시도하세요."
+            )
+            return True
+        return False
+
+    def _show_status_progress(
+        self, room_name: str, llm_name: str, initial_message: str,
+        icon: str = "💾", cancel_tooltip: str = "취소",
+    ) -> SummaryProgressWidget:
+        """상태바에 프로그레스 위젯을 표시하고 기존 상태 영역을 숨긴다."""
+        widget = SummaryProgressWidget(
+            self, llm_name=llm_name, room_name=room_name,
+            icon=icon, initial_message=initial_message,
+            cancel_tooltip=cancel_tooltip,
+        )
+        widget.setMinimumHeight(28)
+        widget.setMaximumHeight(28)
+        if hasattr(self, "_statusbar_container"):
+            self.statusbar.removeWidget(self._statusbar_container)
+        self.statusbar.addWidget(widget, 1)
+        widget.show()
+        self.summary_progress_widget = widget
+        return widget
+
+    def _hide_status_progress(self):
+        """상태바 프로그레스 위젯을 제거하고 기본 상태 영역을 복원한다."""
+        if self.summary_progress_widget:
+            self.statusbar.removeWidget(self.summary_progress_widget)
+            self.summary_progress_widget.deleteLater()
+            self.summary_progress_widget = None
+        if hasattr(self, "_statusbar_container"):
+            self.statusbar.addWidget(self._statusbar_container, 1)
+
     @Slot()
     def _on_backup(self):
         """전체 백업 생성."""
+        if self._busy_guard("전체 백업"):
+            return
+
         # 백업 목록 조회
         backups = self.storage.get_backup_list()
         
@@ -2842,7 +2948,8 @@ class MainWindow(QMainWindow):
         msg += "• DB (chat_history.db)\n"
         msg += "• 원본 대화 (data/original/)\n"
         msg += "• 요약 파일 (data/summary/)\n"
-        msg += "• URL 파일 (data/url/)\n\n"
+        msg += "• URL 파일 (data/url/)\n"
+        msg += "• 상세 분석 (data/detail_summary/)\n\n"
         
         if backups:
             msg += f"기존 백업: {len(backups)}개\n"
@@ -2857,24 +2964,8 @@ class MainWindow(QMainWindow):
         
         if reply != QMessageBox.StandardButton.Yes:
             return
-        
-        self._update_status("백업 중...", "working")
-        
-        # 백업 실행
-        backup_path = self.storage.create_full_backup()
-        
-        if backup_path:
-            self._update_status("백업 완료", "success")
-            QMessageBox.information(
-                self, "백업 완료",
-                f"✅ 백업이 완료되었습니다.\n\n📁 {backup_path}"
-            )
-        else:
-            self._update_status("백업 실패", "error")
-            QMessageBox.warning(
-                self, "백업 실패",
-                "❌ 백업 중 오류가 발생했습니다."
-            )
+
+        self._start_backup_worker("full")
 
     @Slot()
     def _on_refresh_stats(self):
@@ -2904,6 +2995,9 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_room_backup(self):
         """선택된 채팅방 백업."""
+        if self._busy_guard("채팅방 백업"):
+            return
+
         if not self.current_room_id:
             QMessageBox.warning(self, "채팅방 백업", "먼저 채팅방을 선택하세요.")
             return
@@ -2922,31 +3016,64 @@ class MainWindow(QMainWindow):
             f"백업 대상:\n"
             f"• 원본 대화 (data/original/{room_name}/)\n"
             f"• 요약 파일 (data/summary/{room_name}/)\n"
-            f"• URL 파일 (data/url/{room_name}/)",
+            f"• URL 파일 (data/url/{room_name}/)\n"
+            f"• 상세 분석 (data/detail_summary/{room_name}/)",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes
         )
         
         if reply != QMessageBox.StandardButton.Yes:
             return
-        
-        self._update_status(f"'{room_name}' 백업 중...", "working")
-        
-        backup_path = self.storage.backup_room(room_name)
-        
-        if backup_path:
-            self._update_status(f"'{room_name}' 백업 완료", "success")
+
+        self._start_backup_worker("room", room_name)
+
+    def _start_backup_worker(self, mode: str, room_name: str = ""):
+        """백업 워커를 시작하고 상태바 프로그레스를 표시한다."""
+        label = room_name if room_name else "전체"
+        self._summary_in_progress = True
+        self._update_status(f"'{label}' 백업 중...", "working")
+
+        widget = self._show_status_progress(
+            room_name=label,
+            llm_name="백업",
+            initial_message=f"[{label}] 백업 준비 중...",
+            icon="💾",
+            cancel_tooltip="백업 취소",
+        )
+
+        self.backup_worker = BackupWorker(mode=mode, room_name=room_name)
+        self.backup_worker.progress.connect(widget.update_progress)
+        self.backup_worker.finished.connect(self._on_backup_finished)
+        widget.cancel_requested.connect(self.backup_worker.cancel)
+        self.backup_worker.start()
+
+    @Slot(bool, str)
+    def _on_backup_finished(self, success: bool, result: str):
+        """전체/채팅방 백업 완료."""
+        self._summary_in_progress = False
+        self._hide_status_progress()
+
+        if success:
+            self._update_status("백업 완료", "success")
             QMessageBox.information(
-                self, "채팅방 백업 완료",
-                f"✅ '{room_name}' 백업이 완료되었습니다.\n\n📁 {backup_path}"
+                self, "백업 완료",
+                f"✅ 백업이 완료되었습니다.\n\n📁 {result}"
             )
+        elif result == "취소됨":
+            self._update_status("백업 취소됨", "warning")
         else:
             self._update_status("백업 실패", "error")
-            QMessageBox.warning(self, "백업 실패", "❌ 백업 중 오류가 발생했습니다.")
+            QMessageBox.warning(
+                self, "백업 실패",
+                f"❌ {result}"
+            )
 
     @Slot()
     def _on_restore_from_backup(self):
         """전체 백업에서 복원."""
+        if self._busy_guard("전체 복원"):
+            return
+
         backups = self.storage.get_backup_list()
 
         if not backups:
@@ -2992,7 +3119,12 @@ class MainWindow(QMainWindow):
             return
 
         self._update_status("전체 복원 중...", "working")
+        from db import get_db, reset_db
+        reset_db()
         success = self.storage.restore_from_backup(backup_path)
+        self.db = get_db(force_new=True)
+        self._invalidate_room_cache()
+        self._load_rooms()
 
         if success:
             self._update_status("전체 복원 완료 (재시작 권장)", "success")
@@ -3020,6 +3152,9 @@ class MainWindow(QMainWindow):
         Args:
             default_room: 기본 선택할 채팅방 이름 (기타 탭에서 호출 시 현재 채팅방)
         """
+        if self._busy_guard("채팅방 복원"):
+            return
+
         backups = self.storage.get_backup_list()
 
         if not backups:
@@ -4244,11 +4379,18 @@ class MainWindow(QMainWindow):
                 active_worker = self.detail_batch_worker
             elif self.all_rooms_detail_worker and self.all_rooms_detail_worker.isRunning():
                 active_worker = self.all_rooms_detail_worker
+            elif self.backup_worker and self.backup_worker.isRunning():
+                active_worker = self.backup_worker
 
         if active_worker:
+            busy_msg = (
+                "백업이 진행 중입니다. 취소하고 종료하시겠습니까?"
+                if active_worker is self.backup_worker
+                else "요약이 진행 중입니다. 취소하고 종료하시겠습니까?"
+            )
             reply = QMessageBox.question(
                 self, "종료 확인",
-                "요약이 진행 중입니다. 취소하고 종료하시겠습니까?",
+                busy_msg,
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
@@ -4268,7 +4410,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.9.10</p>
+            <p>버전 2.9.11</p>
             <p>카카오톡 대화를 분석하고 AI로 상세 분석하는 도구입니다.</p>
             <p>제작자: 민연홍<br>
             <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>

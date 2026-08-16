@@ -14,8 +14,8 @@
 | **언어** | Python 3.11+ |
 | **GUI** | PySide6 (Qt for Python) |
 | **DB** | SQLite + SQLAlchemy ORM |
-| **버전** | v2.9.10 |
-| **최종 업데이트** | 2026-08-14 |
+| **버전** | v2.9.11 |
+| **최종 업데이트** | 2026-08-16 |
 
 ---
 
@@ -184,7 +184,7 @@ class URL(Base):
 | `DashboardCard` | 대시보드 통계 카드 (`update_card()` 메서드) |
 | `SummaryProgressWidget` | 상태바 내장 비모달 프로그레스 (아이콘+메시지+프로그레스바+취소) |
 
-### Worker 스레드 (7개)
+### Worker 스레드 (8개)
 | 클래스 | 역할 |
 |--------|------|
 | `FileUploadWorker` | 파일 업로드 및 파싱 |
@@ -193,6 +193,7 @@ class URL(Base):
 | `DetailSummaryWorker` | 단일 날짜 상세 분석 HTML 생성 |
 | `DetailBatchWorker` | 채팅방 내 여러 날짜 상세 분석 일괄 생성 |
 | `AllRoomsDetailWorker` | 전체 채팅방 상세 분석 일괄 생성 |
+| `BackupWorker` | 전체/채팅방 백업 (진행률·취소, v2.9.11) |
 | `RecoveryWorker` | 파일에서 DB 복구 |
 
 ### 상태바 아이콘
@@ -853,6 +854,14 @@ DB에 데이터가 있어도 파일이 없으면 재수집 대상이며, DB 저�
 
 ---
 
+### v2.9.11 - 백업 진행률 및 복원 정합성 (2026-08-16)
+- 💾 **백업 진행률**: `BackupWorker` 파일 단위 복사, 상태바 프로그레스·취소
+- 🛡️ **동시 실행 방지**: `_busy_guard` — 백업/복원/DB 복구/누락 채팅방 추가
+- 🗄️ **전체 복원 WAL**: `-wal`/`-shm` 정리 후 백업본 세트로 복원, 복원 전 `reset_db()`
+- 📂 **`get_rooms_in_backup()`**: `detail_summary` 포함
+
+---
+
 ### v2.9.10 - 기동·URL 탭 성능 개선 (2026-08-14)
 - 🚀 **기동 속도**: 채팅방 목록 N+1 → 단일 쿼리 (`get_all_rooms_with_message_counts`), 창 선표시 + QTimer 비동기 `_load_rooms`
 - 🔗 **URL 탭**: `UrlLoadWorker` 백그라운드 로드, 섹션당 50개 HTML 제한, 로드 중 방 전환 가능 (`worker.wait` 제거)
@@ -867,4 +876,4 @@ DB에 데이터가 있어도 파일이 없으면 재수집 대상이며, DB 저�
 
 ---
 
-*마지막 업데이트: 2026-08-14 | 버전: v2.9.10*
+*마지막 업데이트: 2026-08-16 | 버전: v2.9.11*

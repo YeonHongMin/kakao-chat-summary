@@ -98,6 +98,11 @@
 
 ## 4. 버전 히스토리
 
+### v2.9.11 (2026-08-16)
+- **백업**: `BackupWorker` 비동기 복사, 상태바 진행률/취소
+- **복원 안전**: `_busy_guard`(백업·복원·복구), 전체 복원 시 WAL/SHM 정리 + `reset_db()`
+- **`get_rooms_in_backup()`**: `detail_summary` 스캔
+
 ### v2.9.10 (2026-08-14)
 - **기동**: `get_all_rooms_with_message_counts()`, QTimer 지연 `_load_rooms`, 로딩 플레이스홀더
 - **URL 탭**: `UrlLoadWorker`, 섹션당 50개 렌더 제한, 로드 중 방 전환 UI 블로킹 제거

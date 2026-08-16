@@ -20,9 +20,9 @@
 ### 2.1 데스크톱 GUI 애플리케이션
 - **PySide6 기반** 네이티브 데스크톱 앱
 - **카카오톡 스타일** UI (노란색 테마)
-- **탭 인터페이스**: 대시보드, 날짜별 요약, URL 정보, 기타 (지연 로딩 적용)
+- **탭 인터페이스**: 대시보드, 날짜별 상세 분석, URL 정보, 기타 (지연 로딩 적용)
 - **성능 최적화**: 대용량 데이터 로딩 시 UI 멈춤 방지 (지연 로딩 및 타이머 분산 처리)
-- **실시간 진행률 표시** 및 취소 기능
+- **실시간 진행률 표시** 및 취소 기능 (상세 분석·백업)
 
 ### 2.2 다중 LLM 지원
 | Provider | 모델 | 환경변수 | 비고 |
@@ -31,7 +31,10 @@
 | OpenAI | gpt-4o-mini | `OPENAI_API_KEY` | ⚠️ Rate Limit |
 | MiniMax | MiniMax-M3 | `MINIMAX_API_KEY` | **기본, 권장** |
 | Perplexity | sonar | `PERPLEXITY_API_KEY` | |
+| Grok | grok-4-1-fast-non-reasoning | `XAI_API_KEY` | 입력 자르기 없음(기본) |
 | DeepSeek | qwen-or (OpenRouter) | `OPENROUTER_API_KEY` | 32K 컨텍스트 |
+| Xiaomi MiMo | mimo-v2.5-pro | `MIMO_API_KEY` | 1M context |
+| Ollama | (OLLAMA_MODEL) | (없음) | 로컬 LLM |
 
 > 📌 **API 호환성**: 모든 LLM 제공자는 **OpenAI 호환 API** 형식을 사용합니다.
 
@@ -68,9 +71,7 @@
 - 토픽별 근거와 함께 URL 표시 (설명, 시사점, 활용 방법 포함)
 - URL 정규화 및 중복 제거 (특수문자, fragment, trailing slash 제거)
 - 3개 섹션으로 분류 및 표시:
-  - 📌 최근 3일 (50개 제한)
-  - 📌 최근 1주 (무제한)
-  - 📌 전체 (무제한)
+  - 📌 최근 3일 / 최근 1주 / 전체 (화면 표시는 섹션당 최대 50개, v2.9.10)
 - DB + 파일 이중 저장 (동기화/복구 가능)
 - **작업 표시줄 개선**: 동기화 진행 상황이 명확하게 표시 (v2.9.2)
 - **전체 채팅방 일괄 URL 동기화**: 모든 채팅방의 URL을 한 번에 수집 (Ctrl+Shift+U)
@@ -78,10 +79,11 @@
 ### 2.7 데이터 복구 & 백업 (도구 메뉴)
 - **파일 기반 저장**: original/, detail_summary/, url/ 디렉터리에 일별 저장
 - **백업/복원**:
-  - `💾 전체 백업`: DB + 모든 파일 스냅샷 (data/backup/ 에 타임스탐프 디렉터리)
-  - `💾 채팅방 백업`: 선택된 채팅방만 백업
-  - `📂 전체 백업에서 복원`: 백업 스냅샷에서 전체 복원
-  - `📂 채팅방 복원`: 백업에서 특정 채팅방만 복원
+  - `💾 전체 백업`: DB + 모든 파일 스냅샷 (data/backup/ 에 타임스탬프 디렉터리), 상태바 진행률·취소 (v2.9.11)
+  - `💾 채팅방 백업`: 선택된 채팅방만 백업 (동일 진행률 UI)
+  - `📂 전체 백업에서 복원`: 백업 스냅샷에서 전체 복원 (WAL/SHM 정리, 복원 전 DB 연결 해제)
+  - `📂 채팅방 복원`: 백업에서 특정 채팅방만 복원 (`detail_summary` 포함 목록)
+  - 백업·복원·DB 복구는 동시에 실행되지 않음 (`_busy_guard`)
 - **파일↔DB 동기화**:
   - `🔄 파일에서 DB 재구축`: 파일에서 DB 재생성 (파괴적, 기존 DB 삭제)
   - `🔄 누락 채팅방 DB 추가`: 파일에 있지만 DB에 없는 채팅방만 추가 (비파괴적)
@@ -121,7 +123,7 @@ data/
 | 언어 | Python 3.11+ |
 | GUI | PySide6 (Qt for Python) |
 | 데이터베이스 | SQLite + SQLAlchemy ORM |
-| LLM API | GLM, OpenAI, MiniMax, Perplexity (OpenAI 호환) |
+| LLM API | GLM, OpenAI, MiniMax, Perplexity, Grok, OpenRouter, Kilo, MiMo, Ollama |
 | HTTP 클라이언트 | requests |
 | 환경 설정 | python-dotenv |
 | 파일 처리 | pathlib |
@@ -129,37 +131,12 @@ data/
 | 스레드 안전 | 워커별 독립 DB 인스턴스 (v2.4.0) |
 
 ### 4.2 스레드 안전성 (v2.4.0+)
-- **백그라운드 워커**(`FileUploadWorker`, `SyncWorker`, `SummaryGeneratorWorker`, `AllRoomsSummaryWorker`, `AllRoomsUrlSyncWorker`)는 각각 독립적인 `Database()` 인스턴스를 생성하여 사용
-- 싱글톤 `get_db()` 공유로 인한 SQLite 동시 접근 충돌 방지
-- 작업 완료 후 `engine.dispose()`로 명시적 연결 해제
+- **백그라운드 워커**(`FileUploadWorker`, `UrlLoadWorker`, `DetailSummaryWorker`, `DetailBatchWorker`, `AllRoomsDetailWorker`, `AllRoomsUrlSyncWorker`, `BackupWorker`, `RecoveryWorker`)는 각각 독립적인 `Database()` 인스턴스 또는 파일 I/O를 사용
+- 싱글톤 `get_db()`를 워커와 공유하지 않음 (SQLite 동시 접근 충돌 방지)
+- 작업 완료 후 `engine.dispose()`로 명시적 연결 해제 (DB를 쓰는 워커)
 
 ---
 
-## 5. CLI 도구 (수동 요약용, 레거시)
+## 5. CLI 도구 (제거됨, v2.9.0)
 
-`src/manual/` 디렉터리에 독립 실행 가능한 CLI 스크립트 제공. GUI 앱과 별개로 동작하며, DB/FileStorage를 사용하지 않고 `output/` 디렉터리에 직접 파일을 저장합니다.
-
-### 5.1 Full 스크립트 (상세 요약)
-src/ 모듈을 재사용합니다 (`full_config`, `parser`, `chat_processor`, `url_extractor`).
-
-| 스크립트 | 설명 |
-|----------|------|
-| `full_today_summary.py` | 오늘 상세 요약 |
-| `full_yesterday_summary.py` | 어제~오늘 상세 요약 |
-| `full_2days_summary.py` | 엇그제~오늘 상세 요약 |
-| `full_date_summary.py` | 전체 날짜 상세 요약 |
-
-### 5.2 Simple 스크립트 (간결 요약, 음슴체)
-자체 내장 구현(`SimpleConfig`, `SimpleParser`, `SimpleLLMClient`)으로 외부 모듈 의존 없이 단독 실행 가능합니다.
-
-| 스크립트 | 설명 |
-|----------|------|
-| `simple_today_summary.py` | 오늘 간결 요약 |
-| `simple_yesterday_summary.py` | 어제~오늘 간결 요약 |
-| `simple_2days_summary.py` | 엇그제~오늘 간결 요약 |
-| `simple_date_summary.py` | 전체 날짜 간결 요약 |
-
-### 5.3 실행 방법
-```bash
-python src/manual/<스크립트>.py <파일 또는 디렉터리> [--llm <provider>]
-```
+`src/manual/` CLI 스크립트와 기본 마크다운 요약 파이프라인은 **v2.9.0에서 제거**되었습니다. 모든 요약은 GUI의 상세 분석 HTML로만 생성합니다.

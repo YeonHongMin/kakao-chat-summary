@@ -1,6 +1,6 @@
 # 02. Technical Requirements Document (TRD)
 
-## 1. 시스템 아키텍처 (v2.9.10)
+## 1. 시스템 아키텍처 (v2.9.11)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -59,7 +59,7 @@ sys.exit(app.exec())
 ### 2.2 ui/main_window.py
 **역할**: 메인 GUI 윈도우
 
-**주요 클래스** (v2.9.10 기준):
+**주요 클래스** (v2.9.11 기준):
 | 클래스 | 설명 |
 |--------|------|
 | `MainWindow` | 메인 윈도우 (탭, 메뉴, 상태바). 기동 시 `_load_rooms()` QTimer 지연 |
@@ -69,6 +69,7 @@ sys.exit(app.exec())
 | `DetailBatchWorker` | 다중 날짜 상세 분석 일괄 생성 (QThread, `cancel_event` 지원) |
 | `AllRoomsDetailWorker` | 전체 채팅방 상세 분석 일괄 생성 (QThread, `cancel_event` 지원) |
 | `AllRoomsUrlSyncWorker` | 전체 채팅방 URL 동기화 (QThread) |
+| `BackupWorker` | 전체/채팅방 백업 (진행률·취소, v2.9.11) |
 | `RecoveryWorker` | DB 복구 백그라운드 처리 |
 | `CreateRoomDialog` | 채팅방 생성 다이얼로그 |
 | `UploadFileDialog` | 파일 업로드 다이얼로그 |
@@ -79,10 +80,10 @@ sys.exit(app.exec())
 | `SettingsDialog` | 설정 다이얼로그 (LLM 제공자·API 키 → `.env.local` 영구 저장) |
 
 **탭 구조**:
-1. **📊 대시보드**: 채팅방 통계, 최근 요약
-2. **📅 날짜별 요약**: 날짜 네비게이션, 상세 요약 보기
-3. **🔗 URL 정보**: 공유된 URL 목록, 동기화/복구 버튼
-4. **🔧 기타**: 통계 정보 갱신 등
+1. **📊 대시보드**: 채팅방 통계
+2. **📅 날짜별 상세 분석**: 달력, 상세 분석 HTML 보기/생성
+3. **🔗 URL 정보**: 공유된 URL 목록 (섹션당 화면 50개), 동기화/복구 버튼
+4. **🔧 기타**: 통계 갱신, 채팅방 백업/복원
 
 ---
 
@@ -148,11 +149,11 @@ sys.exit(app.exec())
 | `get_original_file_size(room, date)` | 원본 파일 크기 (바이트) |
 | `invalidate_summary_if_file_changed(room, date, old_size, new_size)` | 파일 크기 변경 시 요약 무효화 |
 | `get_all_rooms()` | 모든 채팅방 목록 (디렉터리 스캔) |
-| `create_full_backup()` | 전체 백업 (DB + 모든 파일) (v2.4.0) |
+| `create_full_backup(progress_callback=None, cancel_check=None)` | 전체 백업 (파일 단위 진행률, v2.9.11) |
 | `get_backup_list()` | 백업 목록 조회 (v2.4.0) |
-| `backup_room(room)` | 개별 채팅방 백업 (v2.5.0) |
-| `get_rooms_in_backup(backup_path)` | 백업 내 채팅방 목록 (v2.5.0) |
-| `restore_from_backup(backup_path, room=None)` | 백업에서 복원 (v2.5.0) |
+| `backup_room(room, progress_callback=None, cancel_check=None)` | 개별 채팅방 백업 (v2.9.11 진행률) |
+| `get_rooms_in_backup(backup_path)` | 백업 내 채팅방 목록 (`detail_summary` 포함, v2.9.11) |
+| `restore_from_backup(backup_path, room=None)` | 백업에서 복원 (전체 복원 시 WAL/SHM 세트 교체, v2.9.11) |
 
 ---
 
@@ -194,24 +195,8 @@ sys.exit(app.exec())
 
 ---
 
-### 2.7 llm_client.py
-**역할**: 통합 LLM API 클라이언트
-
-**클래스**: `LLMClient`
-
-**주요 기능**:
-- 스트리밍 모드 (`stream=True`)
-- max_tokens: 16000
-- 타임아웃: (60, 600) 연결/읽기
-- ChatGPT Rate Limit 대기: 21초 (`CHATGPT_RATE_LIMIT_DELAY`)
-
-**응답 완결성 검증** (`_validate_response_content`):
-| 검증 항목 | 설명 |
-|-----------|------|
-| `finish_reason` | `length`면 실패 처리 |
-| 최소 길이 | 100자 미만 실패 |
-| 필수 섹션 | "3줄 요약" 포함 여부 |
-| 불완전 패턴 | `...`, `--` 등 감지, `###` 2개 미만 |
+### 2.7 llm_client.py (제거됨, v2.9.0)
+기본 마크다운 요약 클라이언트는 삭제되었습니다. LLM 호출은 `detail_prompt.call_detail_llm()`이 담당합니다 (`cancel_event` 지원, v2.9.10).
 
 ---
 
@@ -288,44 +273,39 @@ python src/import_to_db.py <파일 또는 디렉터리> [--stats] [--daily]
 [기존 요약 무효화] → 메시지 증가 시 요약 삭제
 ```
 
-### 3.2 요약 생성 흐름
+### 3.2 상세 분석 생성 흐름
 ```
-[요약 옵션 선택] → [SummaryGeneratorWorker]
+[상세 분석 옵션 선택] → [DetailSummaryWorker / DetailBatchWorker / AllRoomsDetailWorker]
        │
        ▼
-[FileStorage.get_dates_needing_summary] → 요약 필요 날짜 확인
+[FileStorage.get_dates_needing_summary] → 상세 분석 필요 날짜 확인
        │
        ▼
 [FileStorage.load_daily_original] → 원본 대화 로드
        │
        ▼
-[LLMClient.summarize] → LLM API 호출
+[call_detail_llm] → LLM API 호출 (cancel_event로 즉시 취소 가능)
        │
        ▼
-[응답 완결성 검증] → 불완전 응답 거부
+[응답 검증 + wrap_detail_html] → HTML 래핑
        │
        ▼
-[FileStorage.save_daily_summary] → Markdown 파일 저장
-       │
-       ▼
-[Database.add_summary] → SQLite 저장
+[FileStorage.save_detail_summary] → data/detail_summary/ 저장
 ```
 
-### 3.3 CLI 스크립트 흐름 (src/manual/)
+### 3.3 백업 흐름 (v2.9.11)
 ```
-[CLI 인자] → 파일/디렉터리 지정
+[전체 백업 / 채팅방 백업] → [_busy_guard]
        │
        ▼
-[KakaoLogParser] → 날짜별 메시지 그룹화
+[BackupWorker] → 파일 목록 집계 → 파일 단위 복사 (진행률 시그널)
        │
        ▼
-[ChatProcessor.process_summary]  (Full) 또는  [SimpleLLMClient] (Simple)
-       │
-       ▼
-[output/ 디렉터리에 직접 파일 저장]  (DB/FileStorage 미사용)
+[취소 시] 부분 백업 디렉터리 삭제  /  [완료] data/backup/<timestamp>/
 ```
 
-> **참고**: Full 스크립트는 src/ 모듈(`parser`, `full_config`, `chat_processor`, `url_extractor`)을 재사용하고, Simple 스크립트는 자체 내장 구현(`SimpleConfig`, `SimpleParser`, `SimpleLLMClient`)으로 외부 의존 없이 단독 실행됩니다.
+### 3.4 CLI 스크립트 (제거됨, v2.9.0)
+`src/manual/` CLI와 `chat_processor`/`llm_client` 기반 마크다운 요약은 더 이상 제공되지 않습니다.
 
 ---
 

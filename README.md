@@ -1,6 +1,6 @@
 # 💬 카카오톡 대화 분석기 (KakaoTalk Chat Summarizer)
 
-> **v2.9.10** | 최종 업데이트: 2026-08-14
+> **v2.9.11** | 최종 업데이트: 2026-08-16
 
 카카오톡 대화 내보내기 파일을 AI(LLM)를 활용하여 날짜별로 **상세 분석 HTML**을 생성하는 **데스크톱 GUI 애플리케이션**입니다.
 
@@ -12,7 +12,7 @@
 - 🌐 **전체 채팅방 일괄 처리**: 모든 채팅방 상세 분석/URL 동기화를 한 번에 수행
 - 🔗 **URL 자동 추출**: 상세 분석 HTML에서 공유된 링크를 별도 탭에서 확인
 - 📊 **대시보드**: 채팅방 통계 확인
-- 💾 **수동/자동 백업**: 파일 기반 저장 + 타임스탬프 전체 백업 (Ctrl+B)
+- 💾 **수동 백업**: 타임스탬프 전체/채팅방 백업 (Ctrl+B), 진행률·취소 지원
 - 🔄 **스마트 무효화**: 메시지 내용 해시 비교로 실제 변경된 날짜만 재생성
 - 🛡️ **스레드 안전**: 백그라운드 워커별 독립 DB 인스턴스
 
@@ -24,9 +24,9 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │  🗨️ 카카오톡 대화 분석기                                        │
 ├───────────────┬─────────────────────────────────────────────────┤
-│  채팅방 목록  │  📊 대시보드 | 📅 날짜별 요약 | 🔗 URL | 🔧 기타 │
+│  채팅방 목록  │  📊 대시보드 | 📅 날짜별 상세 분석 | 🔗 URL | 🔧 기타 │
 │  ───────────  │  ─────────────────────────────────────────────  │
-│  📁 개발팀   │  💬 메시지    👥 참여자    📝 요약              │
+│  📁 개발팀   │  💬 메시지    👥 참여자    🔍 상세 분석         │
 │  📁 스터디방  │   1,234        15         30                   │
 │               │  ─────────────────────────────────────────────  │
 │  [➕ 채팅방]  │  📅 최근 요약                                   │
@@ -43,12 +43,15 @@
 
 | LLM | 키 | 환경변수 | 모델 | 비고 |
 |-----|-----|----------|------|------|
-| MiniMax | `minimax` | `MINIMAX_API_KEY` | MiniMax-M3 | 무제한 입력 / 최대 32,768출력 (**기본, 권장**, 고용량 200k) |
+| MiniMax | `minimax` | `MINIMAX_API_KEY` | MiniMax-M3 | 입력 ~719K chars / 최대 32,768출력 (**기본, 권장**) |
 | Z.AI GLM | `glm` | `ZAI_API_KEY` | glm-5.2 | 입력 1.45M chars / 최대 32,768출력 (1M context) |
-| OpenAI | `chatgpt` | `OPENAI_API_KEY` | gpt-4o-mini | 무제한 입력 / 최대 16,000출력 (⚠️ Rate Limit) |
-| Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | sonar | 무제한 입력 / 최대 16,000출력 |
+| OpenAI | `chatgpt` | `OPENAI_API_KEY` | gpt-4o-mini | 입력 ~167K chars / 최대 16,000출력 (⚠️ Rate Limit) |
+| Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | sonar | 입력 ~168K chars / 최대 16,000출력 |
+| Grok | `grok` | `XAI_API_KEY` | grok-4-1-fast-non-reasoning | 입력 자르기 없음(기본) |
 | DeepSeek(OR) | `qwen-or` | `OPENROUTER_API_KEY` | deepseek-chat | ⚠️ **최대 4만자 입력** / 8,000출력 제한 |
 | DeepSeek(Kilo)| `qwen-kilo` | `KILO_API_KEY` | deepseek-chat | ⚠️ **최대 4만자 입력** / 8,000출력 제한 |
+| Xiaomi MiMo | `mimo` | `MIMO_API_KEY` | mimo-v2.5-pro | 입력 1.45M chars / 최대 32,768출력 |
+| Ollama | `ollama` | (없음) | (OLLAMA_MODEL) | 로컬 실행, 입력 자르기 없음(기본) |
 
 > **💡 LLM 모델 컨텍스트 제약 사항**
 > 대화량이 방대할 경우, **GLM-5.2(1M)**·**MiniMax-M3(512K~1M)**·**MiMo(1M)** 등 장문 컨텍스트 모델 사용을 권장합니다. OpenRouter/Kilo 기본 모델(grok-4.1-fast)은 2M context이며 앱에서 입력 자르기를 하지 않습니다(0).
@@ -71,7 +74,7 @@
 
 ### 1. 저장소 클론
 ```bash
-git clone https://github.com/your-repo/kakao-chat-summary.git
+git clone https://github.com/YeonHongMin/kakao-chat-summary.git
 cd kakao-chat-summary
 ```
 
@@ -129,7 +132,7 @@ python src/app.py
 4. **전체 채팅방 일괄 분석**: 메뉴 → 도구 → `🌐 전체 채팅방 상세 분석 생성` (Ctrl+Shift+G)
 5. **전체 채팅방 URL 동기화**: 메뉴 → 도구 → `🌐 전체 채팅방 URL 동기화` (Ctrl+Shift+U)
 6. **채팅방 삭제**: 채팅방 선택 후 메뉴 → 파일 → `채팅방 삭제...` 클릭
-7. **결과 확인**: 탭에서 대시보드, 날짜별 요약, URL 정보 확인
+7. **결과 확인**: 탭에서 대시보드, 날짜별 상세 분석, URL 정보 확인
 
 ### 3. 카카오톡 대화 내보내기
 
@@ -146,7 +149,7 @@ kakao-chat-summary/
 ├── src/
 │   ├── app.py                   # GUI 앱 진입점
 │   ├── ui/
-│   │   ├── main_window.py       # 메인 윈도우 (2900+ lines)
+│   │   ├── main_window.py       # 메인 윈도우
 │   │   └── styles.py            # 카카오톡 스타일 테마
 │   ├── db/
 │   │   ├── database.py          # Database 클래스
@@ -162,16 +165,18 @@ kakao-chat-summary/
 │
 ├── data/
 │   ├── db/                      # SQLite 데이터베이스
-│   │   └── chat_history.db
 │   ├── original/<채팅방>/       # 원본 대화 (일별 MD)
 │   ├── detail_summary/<채팅방>/ # 상세 분석 HTML
-│   └── url/<채팅방>/            # URL 목록 (3개 파일)
+│   ├── url/<채팅방>/            # URL 목록 (3개 파일)
+│   └── backup/                  # 타임스탬프 백업 (Git 제외)
 │
 ├── upload/                      # 파일 업로드 기본 디렉터리
 ├── logs/                        # 로그 파일
 ├── docs/                        # 문서
+├── start_background.ps1         # Windows 백그라운드 기동
 ├── env.local.example            # 환경변수 예시
 ├── requirements.txt
+├── CHANGELOG.md
 ├── CLAUDE.md                    # AI 에이전트 컨텍스트
 └── README.md
 ```
@@ -250,7 +255,7 @@ logs/summarizer_20260201.log
 ## 🔒 데이터 보안
 
 - `.env.local` 파일은 `.gitignore`에 포함되어 버전 관리에서 제외
-- `data/`, `logs/`, `upload/` 디렉터리 내용은 Git에 포함되지 않음
+- `data/`, `logs/`, `upload/` 디렉터리 내용은 Git에 포함되지 않음 (`detail_summary/`, `backup/` 포함)
 - API 키는 환경 변수 또는 `.env.local`에만 저장 (평문; 클라우드 동기화 폴더에 두지 마세요)
 - **LLM 전송**: 상세 분석 생성 시 해당 날짜의 대화 원문이 선택한 LLM API 서버로 전송됩니다. 민감한 대화는 **Ollama(로컬)** 등 신뢰할 수 있는 환경에서만 사용하세요
 - **로그**: `logs/`에 채팅방명·날짜가 기록될 수 있습니다. 로그 파일도 커밋하지 마세요
@@ -260,6 +265,11 @@ logs/summarizer_20260201.log
 ## 📝 변경 이력
 
 자세한 수정 내역은 [`CHANGELOG.md`](CHANGELOG.md)를 참고하세요.
+
+### v2.9.11 (2026-08-16) - 백업 진행률·복원 정합성
+- 💾 **백업 진행률**: `BackupWorker` 백그라운드 복사, 상태바 프로그레스/취소
+- 🛡️ **복원 안전**: 백업·복원·복구 동시 실행 방지, 전체 복원 시 SQLite WAL/SHM 정리
+- 📂 **채팅방 복원 목록**: 백업의 `detail_summary`도 스캔
 
 ### v2.9.10 (2026-08-14) - 기동·URL 탭 성능·상세 분석 취소 개선
 - 🚀 **기동 속도**: 채팅방 목록 N+1 쿼리 제거, 창 먼저 표시 후 목록 비동기 로드

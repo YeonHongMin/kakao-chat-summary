@@ -3,6 +3,26 @@
 형식: [Semantic Versioning](https://semver.org/)에 가깝게 **주.부.패치**로 표기합니다.  
 이전 버전의 상세 히스토리는 `README.md`의 “변경 이력” 절과 `docs/06-tasks.md`를 참고하세요.
 
+## [2.9.11] — 2026-08-16
+
+### UX
+
+- **백업 진행률 (`src/ui/main_window.py`, `src/file_storage.py`)**
+  - `BackupWorker` — 전체/채팅방 백업을 UI 스레드 밖에서 파일 단위 복사
+  - 상태바 프로그레스 + 취소 (취소 시 부분 백업 디렉터리 삭제)
+
+### 데이터 안전
+
+- **복원·복구 동시 실행 방지**: `_busy_guard`를 백업/복원/DB 복구/누락 채팅방 추가에 적용
+- **전체 복원 SQLite WAL**: 기존 `-wal`/`-shm` 정리 후 백업본이 있으면 세트로 복원, 복원 전 `reset_db()`
+- **`get_rooms_in_backup()`**: `detail_summary` 디렉터리도 스캔
+
+### 버전 표시
+
+- 앱 전반 버전 `2.9.11` (`src/app.py`, About 다이얼로그)
+
+---
+
 ## [2.9.10] — 2026-08-14
 
 ### 성능 및 UX

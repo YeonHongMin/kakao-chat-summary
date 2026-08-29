@@ -14,7 +14,8 @@ from PySide6.QtWidgets import (
     QStatusBar, QMenuBar, QMenu, QDialog, QSpinBox, QComboBox,
     QFormLayout, QDialogButtonBox, QGroupBox, QGridLayout, QApplication,
     QLineEdit, QRadioButton, QButtonGroup, QCheckBox, QProgressDialog,
-    QTabWidget, QDateEdit, QCalendarWidget, QSystemTrayIcon, QStyle
+    QTabWidget, QDateEdit, QCalendarWidget, QSystemTrayIcon, QStyle,
+    QProxyStyle, QStyledItemDelegate
 )
 from html import escape as html_escape
 
@@ -38,6 +39,22 @@ ROOM_SORT_OPTIONS: List[tuple] = [
     ("updated", "최신 업데이트"),
     ("name", "이름순"),
 ]
+
+# 전체 채팅방 요약 순서 정렬 옵션
+ALL_ROOMS_SUMMARY_SORT_OPTIONS: List[tuple] = [
+    ("need_desc", "요약 필요 많은 순 (대용량 우선)"),
+    ("need_asc", "요약 필요 적은 순 (빠른 완료)"),
+    ("msg_desc", "메시지 많은 순"),
+    ("name_asc", "이름순 (가나다/ABC)"),
+    ("updated_desc", "최신 업데이트순"),
+]
+
+
+class CenterAlignComboBoxStyle(QProxyStyle):
+    """콤보박스 버튼 및 팝업 텍스트를 모두 가운데 정렬하는 프록시 스타일."""
+    def drawItemText(self, painter, rect, flags, pal, enabled, text, textRole):
+        flags = (flags & ~int(Qt.AlignLeft) & ~int(Qt.AlignRight)) | int(Qt.AlignCenter)
+        super().drawItemText(painter, rect, flags, pal, enabled, text, textRole)
 
 
 def _apply_text_browser_selection_palette(browser: QTextBrowser) -> None:
@@ -1012,6 +1029,69 @@ class UrlLoadWorker(QThread):
             worker_db.engine.dispose()
 
 
+class RoomListLoadWorker(QThread):
+    """채팅방 목록 및 메시지 수 비동기 로드 워커 (500MB+ DB 단계별 진행률 제공)."""
+    progress = Signal(int, str)  # (percent, status_message)
+    finished = Signal(list, str)  # (rooms_with_counts, error_message)
+
+    def run(self):
+        from db.database import Database
+        worker_db = Database()
+        try:
+            self.progress.emit(10, "데이터베이스 연결 확인 중...")
+            from db.models import ChatRoom, Message
+            from sqlalchemy import select, func
+
+            with worker_db.get_session() as session:
+                self.progress.emit(25, "채팅방 목록 확인 중...")
+                rooms = session.query(ChatRoom).all()
+                total_rooms = len(rooms)
+
+                if total_rooms == 0:
+                    self.progress.emit(100, "완료")
+                    self.finished.emit([], "")
+                    return
+
+                self.progress.emit(40, f"{total_rooms}개 채팅방 메시지 집계 준비 중...")
+
+                # 서브쿼리로 단일 쿼리 집계
+                msg_count_subq = (
+                    select(Message.room_id, func.count(Message.id).label('msg_count'))
+                    .group_by(Message.room_id)
+                    .subquery()
+                )
+                
+                self.progress.emit(65, "대용량 메시지 통계 집계 중...")
+                rows = (
+                    session.query(
+                        ChatRoom,
+                        func.coalesce(msg_count_subq.c.msg_count, 0).label('msg_count'),
+                    )
+                    .outerjoin(msg_count_subq, ChatRoom.id == msg_count_subq.c.room_id)
+                    .all()
+                )
+
+                self.progress.emit(90, "메모리 캐시 생성 중...")
+                rooms_with_counts = [
+                    (
+                        ChatRoom(
+                            id=r.id, name=r.name, file_path=r.file_path,
+                            last_sync_at=r.last_sync_at, created_at=r.created_at,
+                        ),
+                        int(count),
+                    )
+                    for r, count in rows
+                ]
+
+                self.progress.emit(100, "로딩 완료!")
+                self.finished.emit(rooms_with_counts, "")
+        except Exception as e:
+            logger.exception("채팅방 목록 비동기 로드 실패")
+            self.finished.emit([], str(e))
+        finally:
+            worker_db.engine.dispose()
+
+
 class BackupWorker(QThread):
     """전체/채팅방 백업 워커."""
     progress = Signal(int, str)
@@ -1416,9 +1496,11 @@ class MainWindow(QMainWindow):
         self.url_load_worker: Optional[UrlLoadWorker] = None
         self._url_load_seq: int = 0
         self.backup_worker: Optional[BackupWorker] = None
-        
-        # 채팅방 데이터 캐시 — 같은 방 재클릭 시 I/O 스킵
+        self.room_list_worker: Optional[RoomListLoadWorker] = None
+
+        # 채팅방 데이터 캐시 — 같은 방 재클릭 시 I/O 스킵 & 인메모리 정렬
         self._room_cache: dict = {}  # {room_id: {"stats": ..., "loaded": True}}
+        self._cached_rooms_with_counts: List[tuple] = []
         self._room_sort_mode: str = "count"
         
         # 탭 지연 로딩용 플래그
@@ -1472,8 +1554,12 @@ class MainWindow(QMainWindow):
         header_layout.addStretch()
 
         self.room_sort_combo = QComboBox()
+        self.room_sort_combo.setStyle(CenterAlignComboBoxStyle(self.room_sort_combo.style()))
+        self.room_sort_combo.setItemDelegate(QStyledItemDelegate(self.room_sort_combo))
         for value, label in ROOM_SORT_OPTIONS:
             self.room_sort_combo.addItem(label, value)
+        for i in range(self.room_sort_combo.count()):
+            self.room_sort_combo.setItemData(i, Qt.AlignCenter, Qt.TextAlignmentRole)
         self.room_sort_combo.setFixedWidth(118)
         self.room_sort_combo.setStyleSheet("""
             QComboBox {
@@ -1481,15 +1567,16 @@ class MainWindow(QMainWindow):
                 color: white;
                 border: none;
                 border-radius: 6px;
-                padding: 8px 12px;
+                padding: 6px 10px;
                 font-size: 12px;
+                font-weight: 500;
             }
             QComboBox:hover {
                 background-color: #5C3E3E;
             }
             QComboBox::drop-down {
                 border: none;
-                width: 22px;
+                width: 20px;
             }
             QComboBox QAbstractItemView {
                 background-color: #FFFFFF;
@@ -2265,27 +2352,142 @@ class MainWindow(QMainWindow):
         self._statusbar_container.setLayout(statusbar_layout)
         self.statusbar.addWidget(self._statusbar_container, 1)
     
-    def _show_room_list_loading(self, message: str = "로드 중..."):
-        """채팅방 목록 영역에 로딩 표시."""
+    def _show_room_list_loading(
+        self,
+        message: str = "채팅방 목록을 불러오는 중...",
+        percent: Optional[int] = None
+    ):
+        """채팅방 목록 영역에 카카오 스타일 로딩 카드 및 진행률 표시."""
         while self.room_list_layout.count() > 1:
             item = self.room_list_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        label = QLabel(message)
-        label.setAlignment(Qt.AlignCenter)
-        label.setStyleSheet("color: #888888; padding: 20px;")
-        self.room_list_layout.insertWidget(0, label)
+
+        loading_card = QFrame()
+        loading_card.setStyleSheet("""
+            QFrame {
+                background-color: #FFFFFF;
+                border: 1px solid #E5E5E5;
+                border-radius: 8px;
+                margin: 8px 4px;
+                padding: 20px 12px;
+            }
+        """)
+        card_layout = QVBoxLayout(loading_card)
+        card_layout.setSpacing(10)
+        card_layout.setAlignment(Qt.AlignCenter)
+
+        icon_label = QLabel("⏳")
+        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setStyleSheet("font-size: 28px; background: transparent; border: none;")
+        card_layout.addWidget(icon_label)
+
+        text_label = QLabel(message)
+        text_label.setAlignment(Qt.AlignCenter)
+        text_label.setWordWrap(False)
+        text_label.setStyleSheet("color: #222222; font-size: 13px; font-weight: bold; background: transparent; border: none;")
+        card_layout.addWidget(text_label)
+
+        # 진행률 바
+        pbar = QProgressBar()
+        pbar.setFixedHeight(8)
+        pbar.setTextVisible(False)
+        pbar.setStyleSheet("""
+            QProgressBar {
+                background-color: #F0F0F0;
+                border: none;
+                border-radius: 4px;
+            }
+            QProgressBar::chunk {
+                background-color: #FEE500;
+                border-radius: 4px;
+            }
+        """)
+        if percent is not None and percent >= 0:
+            pbar.setValue(percent)
+        else:
+            pbar.setRange(0, 0)  # 무한 로딩 인디케이터
+        card_layout.addWidget(pbar)
+
+        pct_text = f"{percent}%" if percent is not None and percent >= 0 else "대용량 DB 조회 중..."
+        sub_label = QLabel(pct_text)
+        sub_label.setAlignment(Qt.AlignCenter)
+        sub_label.setStyleSheet("color: #888888; font-size: 11px; background: transparent; border: none;")
+        card_layout.addWidget(sub_label)
+
+        self.room_list_layout.insertWidget(0, loading_card)
     
-    def _load_rooms(self):
-        """채팅방 목록 로드."""
+    def _load_rooms(self, force_db: bool = True):
+        """채팅방 목록 로드 (비동기 DB 조회 또는 메모리 캐시)."""
+        if not force_db and self._cached_rooms_with_counts:
+            self._render_room_list()
+            return
+
         self._update_status("채팅방 목록 로드 중...", "working")
-        try:
-            self._load_rooms_impl()
-            self._update_status("준비", "success")
-        except Exception as e:
-            logger.exception("채팅방 목록 로드 실패")
-            self._show_room_list_loading(f"❌ 목록 로드 실패\n{str(e)}")
+        self._show_room_list_loading("채팅방 목록을 불러오는 중...", percent=10)
+
+        if self.room_list_worker is not None and self.room_list_worker.isRunning():
+            self.room_list_worker.terminate()
+            self.room_list_worker.wait(1000)
+
+        self.room_list_worker = RoomListLoadWorker()
+        self.room_list_worker.progress.connect(
+            lambda pct, msg: self._show_room_list_loading(msg, percent=pct)
+        )
+        self.room_list_worker.finished.connect(self._on_rooms_loaded)
+        self.room_list_worker.start()
+        self.room_list_worker.start()
+
+    def _on_rooms_loaded(self, rooms_with_counts: List[tuple], error_message: str):
+        """채팅방 목록 비동기 로드 완료 콜백."""
+        if error_message:
+            logger.error(f"채팅방 목록 로드 오류: {error_message}")
+            self._show_room_list_loading(
+                f"❌ 목록 로드 실패",
+                error_message
+            )
             self._update_status("채팅방 목록 로드 실패", "error")
+            return
+
+        self._cached_rooms_with_counts = rooms_with_counts
+        self._render_room_list()
+        self._update_status("준비", "success")
+        if self.current_room_id:
+            self._highlight_selected_room(self.current_room_id)
+
+    def _render_room_list(self):
+        """메모리에 캐시된 채팅방 목록을 정렬 모드에 맞추어 UI 렌더링."""
+        # 기존 위젯 제거
+        while self.room_list_layout.count() > 1:
+            item = self.room_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        sorted_rooms = self._sort_rooms_with_counts(
+            self._cached_rooms_with_counts, self._room_sort_mode
+        )
+
+        if not sorted_rooms:
+            # 채팅방이 없을 때 안내 메시지
+            empty_label = QLabel("📁 채팅방을 추가해주세요")
+            empty_label.setAlignment(Qt.AlignCenter)
+            empty_label.setStyleSheet("color: #888888; padding: 20px;")
+            self.room_list_layout.insertWidget(0, empty_label)
+            return
+
+        for room, msg_count in sorted_rooms:
+            widget = ChatRoomWidget(
+                room_id=room.id,
+                name=room.name,
+                message_count=msg_count,
+                new_count=0,  # TODO: 새 메시지 수 계산
+                last_sync=room.last_sync_at,
+                file_path=room.file_path
+            )
+            widget.clicked.connect(self._on_room_selected)
+            self.room_list_layout.insertWidget(
+                self.room_list_layout.count() - 1, widget
+            )
 
     def _sort_rooms_with_counts(
         self, rooms_with_counts: List[tuple], sort_mode: str
@@ -2302,51 +2504,18 @@ class MainWindow(QMainWindow):
         # 기본: 메시지 수 내림차순
         return sorted(rooms_with_counts, key=lambda x: x[1], reverse=True)
 
-    @Slot()
+    @Slot(int)
     def _on_room_sort_changed(self, index: int):
-        """정렬 변경 시 목록만 다시 그립니다."""
+        """정렬 변경 시 DB 조회 없이 메모리 캐시에서 즉시 다시 그립니다."""
         if index < 0:
             return
         self._room_sort_mode = self.room_sort_combo.currentData()
-        self._load_rooms_impl()
-        if self.current_room_id:
-            self._highlight_selected_room(self.current_room_id)
-
-    def _load_rooms_impl(self):
-        """채팅방 목록 DB 조회 및 위젯 생성."""
-        # 기존 위젯 제거
-        while self.room_list_layout.count() > 1:
-            item = self.room_list_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        
-        # DB에서 채팅방 목록 + 메시지 수 (단일 쿼리)
-        rooms_with_counts = self.db.get_all_rooms_with_message_counts()
-        rooms_with_counts = self._sort_rooms_with_counts(
-            rooms_with_counts, self._room_sort_mode
-        )
-        
-        if not rooms_with_counts:
-            # 채팅방이 없을 때 안내 메시지
-            empty_label = QLabel("📁 채팅방을 추가해주세요")
-            empty_label.setAlignment(Qt.AlignCenter)
-            empty_label.setStyleSheet("color: #888888; padding: 20px;")
-            self.room_list_layout.insertWidget(0, empty_label)
-            return
-        
-        for room, msg_count in rooms_with_counts:
-            widget = ChatRoomWidget(
-                room_id=room.id,
-                name=room.name,
-                message_count=msg_count,
-                new_count=0,  # TODO: 새 메시지 수 계산
-                last_sync=room.last_sync_at,
-                file_path=room.file_path
-            )
-            widget.clicked.connect(self._on_room_selected)
-            self.room_list_layout.insertWidget(
-                self.room_list_layout.count() - 1, widget
-            )
+        if self._cached_rooms_with_counts:
+            self._render_room_list()
+            if self.current_room_id:
+                self._highlight_selected_room(self.current_room_id)
+        else:
+            self._load_rooms(force_db=True)
     
     def _invalidate_room_cache(self, room_id: Optional[int] = None):
         """채팅방 캐시 무효화. room_id=None이면 전체 캐시 초기화."""
@@ -2725,24 +2894,32 @@ class MainWindow(QMainWindow):
         storage = get_storage()
 
         # DB 채팅방 + 파일 저장소 채팅방 통합 (v2.9.0)
-        db_rooms = {r.name: r.id for r in self.db.get_all_rooms()}
+        db_rooms_map = {}
+        if self._cached_rooms_with_counts:
+            for r, count in self._cached_rooms_with_counts:
+                db_rooms_map[r.name] = (r.id, count, r.last_sync_at)
+        else:
+            for r in self.db.get_all_rooms():
+                db_rooms_map[r.name] = (r.id, self.db.get_message_count_by_room(r.id), r.last_sync_at)
+
         file_rooms = storage.get_all_rooms()
-        all_room_names = sorted(set(list(db_rooms.keys()) + file_rooms))
+        all_room_names = sorted(set(list(db_rooms_map.keys()) + file_rooms))
 
         if not all_room_names:
             QMessageBox.warning(self, "알림", "채팅방이 없습니다.")
             return
 
-        # 각 채팅방별 상세 분석 필요 날짜 수 집계 (빠른 set 비교)
+        # 각 채팅방별 상세 분석 필요 날짜 수 및 메시지 수 집계 (빠른 set 비교)
         QApplication.processEvents()  # UI 응답성 유지
         room_info = []
         total_needed = 0
         for room_name in all_room_names:
-            room_id = db_rooms.get(room_name, 0)
+            room_stat = db_rooms_map.get(room_name, (0, 0, None))
+            room_id, msg_cnt, last_sync = room_stat
             available = set(storage.get_available_dates(room_name))
             done = set(storage.get_summarized_dates(room_name))
             needing = len(available - done)
-            room_info.append((room_id, room_name, len(available), needing))
+            room_info.append((room_id, room_name, len(available), needing, msg_cnt, last_sync))
             total_needed += needing
 
         if total_needed == 0:
@@ -2750,6 +2927,34 @@ class MainWindow(QMainWindow):
                 self, "알림", "모든 채팅방의 상세 분석이 이미 완료되어 있습니다."
             )
             return
+
+        def _sort_summary_room_info(info_list: list, sort_mode: str) -> list:
+            """요약 대상 채팅방 정렬."""
+            if sort_mode == "need_desc":
+                return sorted(info_list, key=lambda x: (x[3], x[4]), reverse=True)
+            if sort_mode == "need_asc":
+                return sorted(info_list, key=lambda x: (0 if x[3] > 0 else 1, x[3], x[4]))
+            if sort_mode == "msg_desc":
+                return sorted(info_list, key=lambda x: x[4], reverse=True)
+            if sort_mode == "updated_desc":
+                return sorted(info_list, key=lambda x: x[5] or datetime.min, reverse=True)
+            # 기본: 이름 오름차순
+            return sorted(info_list, key=lambda x: x[1])
+
+        def _format_preview(info_list: list) -> str:
+            """채팅방 현황 프리뷰 텍스트 생성."""
+            lines = []
+            for _, rn, total, need, msg_cnt, _ in info_list:
+                msg_str = f", {msg_cnt:,}개 메시지" if msg_cnt > 0 else ""
+                if need > 0:
+                    lines.append(f"  • {rn}: {need}일 필요 (전체 {total}일{msg_str})")
+                else:
+                    lines.append(f"  • {rn}: ✅ 완료{msg_str}")
+            return "\n".join(lines)
+
+        # 기본 정렬: 요약 필요 많은 순 (대용량 우선)
+        current_sort_mode = "need_desc"
+        sorted_room_info = _sort_summary_room_info(room_info, current_sort_mode)
 
         # LLM 선택 다이얼로그
         from full_config import config, LLM_PROVIDERS
@@ -2763,25 +2968,33 @@ class MainWindow(QMainWindow):
 
         dialog = QDialog(self)
         dialog.setWindowTitle("🌐 전체 채팅방 상세 분석 생성")
-        dialog.setFixedWidth(450)
+        dialog.setFixedWidth(480)
         dlg_layout = QVBoxLayout(dialog)
-
-        # 채팅방별 현황
-        info_lines = []
-        for _, rn, total, need in room_info:
-            if need > 0:
-                info_lines.append(f"  • {rn}: {need}일 필요 (전체 {total}일)")
-            else:
-                info_lines.append(f"  • {rn}: ✅ 완료")
 
         dlg_layout.addWidget(QLabel(f"<b>🔍 {len(all_room_names)}개 채팅방 — 총 {total_needed}일 상세 분석 생성</b>"))
 
         from PySide6.QtWidgets import QTextEdit
         info_text = QTextEdit()
-        info_text.setPlainText("\n".join(info_lines))
+        info_text.setPlainText(_format_preview(sorted_room_info))
         info_text.setReadOnly(True)
-        info_text.setMaximumHeight(150)
+        info_text.setMaximumHeight(160)
         dlg_layout.addWidget(info_text)
+
+        form = QFormLayout()
+
+        # 요약 순서 정렬 콤보
+        sort_combo = QComboBox()
+        for value, label in ALL_ROOMS_SUMMARY_SORT_OPTIONS:
+            sort_combo.addItem(label, value)
+        sort_combo.setCurrentIndex(0)  # need_desc 기본 선택
+
+        def _on_dialog_sort_changed():
+            mode = sort_combo.currentData()
+            preview_sorted = _sort_summary_room_info(room_info, mode)
+            info_text.setPlainText(_format_preview(preview_sorted))
+
+        sort_combo.currentIndexChanged.connect(_on_dialog_sort_changed)
+        form.addRow("요약 순서:", sort_combo)
 
         llm_combo = QComboBox()
         llm_combo.addItems(llm_items)
@@ -2792,7 +3005,6 @@ class MainWindow(QMainWindow):
         )
         current_idx = llm_keys.index(pref) if pref in llm_keys else 0
         llm_combo.setCurrentIndex(current_idx)
-        form = QFormLayout()
         form.addRow("LLM:", llm_combo)
         dlg_layout.addLayout(form)
 
@@ -2812,6 +3024,11 @@ class MainWindow(QMainWindow):
 
         selected_llm = llm_keys[llm_combo.currentIndex()]
         llm_display_name = llm_combo.currentText()
+        selected_sort = sort_combo.currentData()
+
+        # 선택된 정렬 순서대로 최종 대상 채팅방 목록 구성
+        final_sorted = _sort_summary_room_info(room_info, selected_sort)
+        target_rooms = [(rid, rn) for rid, rn, _, need, _, _ in final_sorted if need > 0]
 
         # 워커 시작
         self._summary_in_progress = True
@@ -2825,7 +3042,6 @@ class MainWindow(QMainWindow):
 
         self._update_status("🔍 전체 채팅방 상세 분석 중...", "working")
 
-        target_rooms = [(rid, rn) for rid, rn, _, need in room_info if need > 0]
         self.all_rooms_detail_worker = AllRoomsDetailWorker(target_rooms, selected_llm)
         self.all_rooms_detail_worker.progress.connect(
             self.summary_progress_widget.update_progress
@@ -4479,6 +4695,9 @@ class MainWindow(QMainWindow):
                 return
             active_worker.cancel()
             active_worker.wait(5000)
+
+        if self.room_list_worker and self.room_list_worker.isRunning():
+            self.room_list_worker.wait(1000)
         
         event.accept()
         QApplication.quit()
@@ -4489,7 +4708,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.9.13</p>
+            <p>버전 2.9.14</p>
             <p>카카오톡 대화를 분석하고 AI로 상세 분석하는 도구입니다.</p>
             <p>제작자: 민연홍<br>
             <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>

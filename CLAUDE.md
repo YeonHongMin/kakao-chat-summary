@@ -14,8 +14,8 @@
 | **언어** | Python 3.11+ |
 | **GUI** | PySide6 (Qt for Python) |
 | **DB** | SQLite + SQLAlchemy ORM |
-| **버전** | v2.9.12 |
-| **최종 업데이트** | 2026-08-16 |
+| **버전** | v2.9.14 |
+| **최종 업데이트** | 2026-08-29 |
 
 ---
 
@@ -854,6 +854,22 @@ DB에 데이터가 있어도 파일이 없으면 재수집 대상이며, DB 저�
 
 ---
 
+### v2.9.14 - 대용량 DB 로딩 최적화·요약 순서 정렬·UI 개선 (2026-08-29)
+- ⚡ **대용량 DB(500MB+) 비동기 로딩**: `RoomListLoadWorker` 분리로 UI 프리징 방지, 실시간 % 게이지 및 프로그레스 바 제공
+- 🚀 **백업 확인 팝업 지연 해결**: `get_backup_list()`에서 불필요한 3만 개 파일 전수 스캔 생략하여 백업 버튼 클릭 시 1초 내 즉시 팝업 표시
+- 📋 **인메모리 정렬 캐싱**: 채팅방 목록 정렬 변경 시 DB 재조회 없이 0.01초 내 메모리 즉시 재정렬
+- 🌐 **전체 채팅방 상세 분석 순서 정렬**: 전체 요약 다이얼로그(`Ctrl+Shift+G`)에 요약 순서 옵션(대용량 우선/빠른 완료/메시지순/이름순/최신순) 및 실시간 프리뷰 추가
+- 🎨 **정렬 콤보박스 글자 가운데 정렬**: `CenterAlignComboBoxStyle` (QProxyStyle) 적용으로 버튼 텍스트 및 드롭다운 항목 가운데 정렬
+
+---
+
+### v2.9.13 - NFS SQLite 안정화 및 LLM 출력 토큰 한도 정비 (2026-08-16)
+- 🛡️ **NFS/SMB SQLite 안정화**: 네트워크 경로 감지 시 `journal_mode=DELETE`, `synchronous=NORMAL`, `busy_timeout=30000` 적용으로 `disk I/O error` 완화
+- 🐛 **DeepSeek V4 Flash 출력 잘림 해결**: API `max_tokens` 필드 연동 (~8K 잘림 방지) 및 제공자별 `max_tokens_api_field` 지원
+- 📋 **채팅방 정렬 UI**: 좌측 패널 상단에 메시지 수/최신 업데이트/이름순 정렬 기능 추가
+
+---
+
 ### v2.9.12 - DeepSeek V4 Flash LLM (2026-08-16)
 - 🆕 **DeepSeek V4 Flash**: `deepseek` 제공자 (`DEEPSEEK_API_KEY`, 1M context, thinking disabled)
 
@@ -879,4 +895,4 @@ DB에 데이터가 있어도 파일이 없으면 재수집 대상이며, DB 저�
 
 ---
 
-*마지막 업데이트: 2026-08-16 | 버전: v2.9.12*
+*마지막 업데이트: 2026-08-29 | 버전: v2.9.14*

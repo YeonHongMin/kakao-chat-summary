@@ -98,6 +98,13 @@
 
 ## 4. 버전 히스토리
 
+### v2.9.14 (2026-08-29)
+- **대용량 DB 비동기 로딩**: `RoomListLoadWorker` 분리로 500MB+ DB 로드 시 UI 프리징(Hang) 해결 및 % 진행률/프로그레스 바 표시
+- **백업 팝업 지연 해결**: `get_backup_list()` 3만 파일 전수 스캔 생략으로 확인 창 즉시 팝업
+- **인메모리 정렬 캐싱**: 채팅방 목록 정렬 시 DB 재조회 없이 0.01초 내 즉시 재정렬
+- **전체 요약 순서 정렬**: 전체 채팅방 상세 분석 생성 시 요약 순서(대용량 우선/빠른 완료/메시지순/이름순/최신순) 선택 및 실시간 프리뷰
+- **정렬 UI 가운데 정렬**: `CenterAlignComboBoxStyle` 적용으로 헤더 영역 정렬 콤보박스 텍스트 가운데 정렬
+
 ### v2.9.13 (2026-08-16)
 - **NFS SQLite**: 네트워크 경로 `journal_mode=DELETE`, `CHAT_DB_PATH`/`SQLITE_JOURNAL_MODE` 선택 env
 - **DeepSeek 출력**: `max_tokens` 필드 수정, `max_tokens_api_field` 예방 (MiniMax/MiMo/DeepSeek)

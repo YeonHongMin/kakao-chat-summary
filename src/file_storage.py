@@ -789,9 +789,9 @@ class FileStorage:
                 shutil.rmtree(backup_dir, ignore_errors=True)
             return None
     
-    def get_backup_list(self) -> List[Dict]:
+    def get_backup_list(self, calculate_size: bool = False) -> List[Dict]:
         """
-        기존 백업 목록 조회.
+        기존 백업 목록 조회 (NFS 환경 최적화: 기본적으로 크기 계산 생략하여 즉시 반환).
         
         Returns:
             [{'name': 'YYYYMMDD_HHMMSS', 'path': Path, 'created': datetime, 'size_mb': float}, ...]
@@ -801,24 +801,35 @@ class FileStorage:
             return []
         
         backups = []
-        for d in sorted(backup_base.iterdir(), reverse=True):
-            if d.is_dir():
-                # 디렉터리 크기 계산 (MB)
-                total_size = sum(f.stat().st_size for f in d.rglob('*') if f.is_file())
-                size_mb = total_size / (1024 * 1024)
-                
-                # 생성 시간 파싱
-                try:
-                    created = datetime.strptime(d.name, "%Y%m%d_%H%M%S")
-                except ValueError:
-                    created = datetime.fromtimestamp(d.stat().st_ctime)
-                
-                backups.append({
-                    'name': d.name,
-                    'path': d,
-                    'created': created,
-                    'size_mb': round(size_mb, 2)
-                })
+        try:
+            for d in sorted(backup_base.iterdir(), reverse=True):
+                if d.is_dir():
+                    size_mb = 0.0
+                    if calculate_size:
+                        # calculate_size=True 일 때만 NFS 전체 재귀 파일 스캔 수행
+                        try:
+                            total_size = sum(f.stat().st_size for f in d.rglob('*') if f.is_file())
+                            size_mb = total_size / (1024 * 1024)
+                        except Exception:
+                            size_mb = 0.0
+                    
+                    # 생성 시간 파싱
+                    try:
+                        created = datetime.strptime(d.name[:15], "%Y%m%d_%H%M%S")
+                    except ValueError:
+                        try:
+                            created = datetime.fromtimestamp(d.stat().st_ctime)
+                        except Exception:
+                            created = datetime.now()
+                    
+                    backups.append({
+                        'name': d.name,
+                        'path': d,
+                        'created': created,
+                        'size_mb': round(size_mb, 2)
+                    })
+        except Exception as e:
+            print(f"⚠️ 백업 목록 조회 오류: {e}")
         
         return backups
     

@@ -108,7 +108,7 @@ class Database:
         )
 
         journal_mode = self.journal_mode
-        synchronous = "FULL" if on_network and journal_mode != "WAL" else "NORMAL"
+        synchronous = "NORMAL"
 
         from sqlalchemy import event
 
@@ -119,6 +119,7 @@ class Database:
             cursor.execute(f"PRAGMA synchronous={synchronous}")
             cursor.execute("PRAGMA cache_size=10000")
             cursor.execute("PRAGMA temp_store=MEMORY")
+            cursor.execute("PRAGMA busy_timeout=30000")
             cursor.close()
 
         if on_network and journal_mode == "DELETE":

@@ -38,16 +38,19 @@ data/*
 !data/db/
 !data/original/
 !data/summary/
+!data/detail_summary/
 !data/url/
 !data/backup/
 data/db/*
 data/original/*
 data/summary/*
+data/detail_summary/*
 data/url/*
 data/backup/*
 !data/db/.gitkeep
 !data/original/.gitkeep
 !data/summary/.gitkeep
+!data/detail_summary/.gitkeep
 !data/url/.gitkeep
 
 # Logs

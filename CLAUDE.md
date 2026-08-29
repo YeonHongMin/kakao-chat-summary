@@ -14,7 +14,7 @@
 | **언어** | Python 3.11+ |
 | **GUI** | PySide6 (Qt for Python) |
 | **DB** | SQLite + SQLAlchemy ORM |
-| **버전** | v2.9.14 |
+| **버전** | v2.9.16 |
 | **최종 업데이트** | 2026-08-29 |
 
 ---
@@ -184,15 +184,17 @@ class URL(Base):
 | `DashboardCard` | 대시보드 통계 카드 (`update_card()` 메서드) |
 | `SummaryProgressWidget` | 상태바 내장 비모달 프로그레스 (아이콘+메시지+프로그레스바+취소) |
 
-### Worker 스레드 (8개)
+### Worker 스레드 (10개)
 | 클래스 | 역할 |
 |--------|------|
 | `FileUploadWorker` | 파일 업로드 및 파싱 |
-| `AllRoomsUrlSyncWorker` | 전체 채팅방 URL 동기화 (상세 분석 HTML에서 추출) |
+| `RoomListLoadWorker` | 채팅방 목록 + 메시지 수 비동기 로드 (% 진행률, v2.9.14) |
+| `AllRoomsUrlSyncWorker` | 전체 채팅방 URL 동기화 (병렬 HTML 파싱, v2.9.15) |
 | `UrlLoadWorker` | URL 탭 데이터 로드 (DB + 파일 I/O, v2.9.10) |
 | `DetailSummaryWorker` | 단일 날짜 상세 분석 HTML 생성 |
 | `DetailBatchWorker` | 채팅방 내 여러 날짜 상세 분석 일괄 생성 |
-| `AllRoomsDetailWorker` | 전체 채팅방 상세 분석 일괄 생성 |
+| `AllRoomsDetailWorker` | 전체 채팅방 상세 분석 일괄 생성 (순차, 레거시) |
+| `ParallelAllRoomsDetailWorker` | 전체 채팅방 상세 분석 병렬 생성 (레인 1~4, 다중 LLM, v2.9.16) |
 | `BackupWorker` | 전체/채팅방 백업 (진행률·취소, v2.9.11) |
 | `RecoveryWorker` | 파일에서 DB 복구 |
 
@@ -211,7 +213,7 @@ class URL(Base):
 
 ### 1. 채팅방 관리
 - 채팅방 생성 (Enter 키로 즉시 생성 가능)
-- 채팅방 삭제 (파일 메뉴 → 현재 선택된 채팅방 삭제, 확인 다이얼로그)
+- 채팅방 삭제 (파일 메뉴 → 현재 선택된 채팅방 삭제, v2.9.15: 💾 백업 후 완전 삭제(권장, 고아 방지) / 🗑️ DB만 삭제 선택)
 - 채팅방 목록 (메시지 개수 내림차순 정렬)
 - 파일 업로드 (기본 디렉터리: `upload/`)
 
@@ -854,6 +856,24 @@ DB에 데이터가 있어도 파일이 없으면 재수집 대상이며, DB 저�
 
 ---
 
+### v2.9.16 - 병렬 LLM 상세 분석 (2026-08-29)
+- 🚀 **`ParallelAllRoomsDetailWorker`**: 채팅방 레인(1~4개, 기본 3) 병렬 상세 분석 — 레인은 LLM 호출+HTML 파일 저장만, DB 쓰기(방별 URL 동기화)는 코디네이터 단독 직렬 (NFS SQLite 동시 쓰기 차단)
+- 🤖 **다중 LLM 라운드로빈**: Ctrl+Shift+G에서 모델 복수 체크 → 채팅방에 순환 배정, `LLMProvider.max_concurrency`(기본 2) 세마포어로 동일 제공자 rate limit 방지
+- 📊 **레인 현황 표시**: 상태바 `⏳ 3레인 | 방A 08-12(MiniMax) · ... — 12/152일`
+- 🎨 **로딩 게이지 실측 진행률**: 채팅방 목록 로딩을 방 단위 개별 집계로 전환 — `[12/28] 방이름 집계 중...` + 실제 % 표시 (65%/89% 고정 및 가상 % 제거)
+- 🎯 **업로드 후 스크롤 튐 해소**: 업로드·방 생성 완료 시 전체 재집계 대신 해당 방만 부분 갱신(`_refresh_room_in_cache`), `_render_room_list` 스크롤 위치 저장/복원
+
+---
+
+### v2.9.15 - URL 병렬 동기화 최적화 및 안정성 패치 (2026-08-29)
+- 🚀 **URL 수집 병렬 I/O (`url_extractor.extract_room_urls_parallel`)**: `ThreadPoolExecutor` 멀티스레드 병렬 로딩으로 NFS 네트워크 RTT 지연 해소 (10배~50배 고속화)
+- ⚡ **DB URL 일괄 트랜잭션 최적화 (`Database.add_urls_batch`)**: 매 URL별 트랜잭션(N+1 쿼리)을 1회 일괄 조회 및 단일 세션 커밋으로 통합
+- 💾 **채팅방 백업 후 완전 삭제**: 삭제 다이얼로그에 `백업 후 완전 삭제(권장)` / `DB만 삭제` 선택. 백업 성공 시에만 DB+파일 삭제 (고아 디렉터리 방지)
+- 🛡️ **Reflextion 안정성 패치**: `_show_room_list_loading` `sub_text` 파라미터 지원 및 타입 가드, `_load_rooms` 스레드 중복 시작 제거, 백업 목록 용량 표시 및 이름 정렬 개선
+- 🔒 **보안 및 환경 정비**: `.gitignore`에 `data/detail_summary/` 추가, `env.local.example` 사설 IP 정리
+
+---
+
 ### v2.9.14 - 대용량 DB 로딩 최적화·요약 순서 정렬·UI 개선 (2026-08-29)
 - ⚡ **대용량 DB(500MB+) 비동기 로딩**: `RoomListLoadWorker` 분리로 UI 프리징 방지, 실시간 % 게이지 및 프로그레스 바 제공
 - 🚀 **백업 확인 팝업 지연 해결**: `get_backup_list()`에서 불필요한 3만 개 파일 전수 스캔 생략하여 백업 버튼 클릭 시 1초 내 즉시 팝업 표시
@@ -895,4 +915,4 @@ DB에 데이터가 있어도 파일이 없으면 재수집 대상이며, DB 저�
 
 ---
 
-*마지막 업데이트: 2026-08-29 | 버전: v2.9.14*
+*마지막 업데이트: 2026-08-29 | 버전: v2.9.16*

@@ -1,6 +1,6 @@
 # 02. Technical Requirements Document (TRD)
 
-## 1. 시스템 아키텍처 (v2.9.11)
+## 1. 시스템 아키텍처 (v2.9.16)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -59,16 +59,19 @@ sys.exit(app.exec())
 ### 2.2 ui/main_window.py
 **역할**: 메인 GUI 윈도우
 
-**주요 클래스** (v2.9.11 기준):
+**주요 클래스** (v2.9.16 기준):
 | 클래스 | 설명 |
 |--------|------|
 | `MainWindow` | 메인 윈도우 (탭, 메뉴, 상태바). 기동 시 `_load_rooms()` QTimer 지연 |
+| `CenterAlignComboBoxStyle` | 콤보박스 버튼/드롭다운 텍스트 가운데 정렬 QProxyStyle (v2.9.14) |
 | `FileUploadWorker` | 파일 업로드 백그라운드 처리 |
+| `RoomListLoadWorker` | 채팅방 목록 + 메시지 수 비동기 로드 (대용량 DB 프리징 방지, % 진행률, v2.9.14) |
 | `UrlLoadWorker` | URL 탭 DB·파일 로드 (UI 스레드 비블로킹, v2.9.10) |
 | `DetailSummaryWorker` | 단일 날짜 상세 분석 생성 (QThread, `cancel_event` 지원) |
 | `DetailBatchWorker` | 다중 날짜 상세 분석 일괄 생성 (QThread, `cancel_event` 지원) |
-| `AllRoomsDetailWorker` | 전체 채팅방 상세 분석 일괄 생성 (QThread, `cancel_event` 지원) |
-| `AllRoomsUrlSyncWorker` | 전체 채팅방 URL 동기화 (QThread) |
+| `AllRoomsDetailWorker` | 전체 채팅방 상세 분석 일괄 생성 (순차, 레거시 — QThread, `cancel_event` 지원, 요약 순서 정렬 v2.9.14) |
+| `ParallelAllRoomsDetailWorker` | 전체 채팅방 상세 분석 병렬 생성 (레인 1~4, 다중 LLM 라운드로빈, 제공자별 세마포어, 코디네이터 단독 DB 쓰기, v2.9.16) |
+| `AllRoomsUrlSyncWorker` | 전체 채팅방 URL 동기화 (QThread, 멀티스레드 병렬 HTML 파싱 v2.9.15) |
 | `BackupWorker` | 전체/채팅방 백업 (진행률·취소, v2.9.11) |
 | `RecoveryWorker` | DB 복구 백그라운드 처리 |
 | `CreateRoomDialog` | 채팅방 생성 다이얼로그 |
@@ -108,12 +111,13 @@ sys.exit(app.exec())
 | `add_summary(room_id, summary_date, summary_type, content, llm_provider)` | 요약 저장 |
 | `get_summaries_by_room(room_id, summary_type)` | 요약 목록 조회 |
 | `delete_summary(room_id, summary_date)` | 요약 삭제 |
-| `add_urls_batch(room_id, urls)` | URL 일괄 추가 |
+| `add_urls_batch(room_id, urls)` | URL 일괄 추가 (단일 세션·트랜잭션 벌크 저장, v2.9.15) |
 | `get_urls_by_room(room_id)` | URL 목록 조회 |
 | `clear_urls_by_room(room_id)` | URL 전체 삭제 |
 
 **SQLite 최적화**:
-- WAL 모드 활성화
+- 저널 모드: 로컬 디스크 WAL / 네트워크(NFS·SMB) 경로 감지 시 DELETE (v2.9.13)
+- `synchronous=NORMAL` + `busy_timeout=30000` (NFS 락 대기 완화, v2.9.14)
 - `expire_on_commit=False` (세션 종료 후 ORM 객체 속성 접근 허용)
 - 배치 처리 (500개 단위)
 - 중복 메시지 체크
@@ -150,7 +154,7 @@ sys.exit(app.exec())
 | `invalidate_summary_if_file_changed(room, date, old_size, new_size)` | 파일 크기 변경 시 요약 무효화 |
 | `get_all_rooms()` | 모든 채팅방 목록 (디렉터리 스캔) |
 | `create_full_backup(progress_callback=None, cancel_check=None)` | 전체 백업 (파일 단위 진행률, v2.9.11) |
-| `get_backup_list()` | 백업 목록 조회 (v2.4.0) |
+| `get_backup_list(calculate_size=False)` | 백업 목록 조회 (기본 크기 계산 생략 — NFS 지연 방지, v2.9.14) |
 | `backup_room(room, progress_callback=None, cancel_check=None)` | 개별 채팅방 백업 (v2.9.11 진행률) |
 | `get_rooms_in_backup(backup_path)` | 백업 내 채팅방 목록 (`detail_summary` 포함, v2.9.11) |
 | `restore_from_backup(backup_path, room=None)` | 백업에서 복원 (전체 복원 시 WAL/SHM 세트 교체, v2.9.11) |
@@ -214,15 +218,8 @@ sys.exit(app.exec())
 
 ---
 
-### 2.9 chat_processor.py
-**역할**: 채팅 텍스트 처리 및 포맷팅
-
-**클래스**: `ChatProcessor(provider)`
-
-| 메서드 | 설명 |
-|--------|------|
-| `process_summary(text)` | LLM으로 요약 후 본문만 반환 (헤더/푸터는 `file_storage`에서 추가) |
-| `_format_as_markdown(content)` | 마크다운 포맷팅 (v2.2.3에서 헤더/푸터 제거, content.strip()만 반환) |
+### 2.9 chat_processor.py (제거됨, v2.9.0)
+기본 마크다운 요약 처리기는 삭제되었습니다. 상세 분석 응답 후처리는 `detail_prompt.py`가 담당합니다.
 
 ---
 
@@ -247,6 +244,9 @@ python src/import_to_db.py <파일 또는 디렉터리> [--stats] [--daily]
 | 함수 | 설명 |
 |------|------|
 | `extract_urls_from_text(text)` | 텍스트에서 URL 추출 |
+| `extract_urls_from_html(html_text)` | 상세 분석 HTML의 `url-card`·`<a href>`에서 URL+설명 추출 (v2.9.0) |
+| `extract_room_urls_parallel(storage, room, max_workers=10, ...)` | 채팅방 상세 HTML 전체를 `ThreadPoolExecutor`로 병렬 로드·추출 — NFS RTT 병목 해소 (v2.9.15) |
+| `merge_urls_by_date(urls_by_date, start_date=None)` | 동일 URL은 최신 날짜 설명만 유지 (v2.9.9) |
 | `extract_url_with_description(line)` | 단일 라인에서 URL+설명 추출 |
 | `normalize_url(url)` | URL 정규화 (특수문자, fragment 제거) |
 | `deduplicate_urls(urls_dict)` | URL 중복 제거 및 설명 병합 |
@@ -275,7 +275,7 @@ python src/import_to_db.py <파일 또는 디렉터리> [--stats] [--daily]
 
 ### 3.2 상세 분석 생성 흐름
 ```
-[상세 분석 옵션 선택] → [DetailSummaryWorker / DetailBatchWorker / AllRoomsDetailWorker]
+[상세 분석 옵션 선택] → [DetailSummaryWorker / DetailBatchWorker / ParallelAllRoomsDetailWorker]
        │
        ▼
 [FileStorage.get_dates_needing_summary] → 상세 분석 필요 날짜 확인
@@ -291,6 +291,17 @@ python src/import_to_db.py <파일 또는 디렉터리> [--stats] [--daily]
        │
        ▼
 [FileStorage.save_detail_summary] → data/detail_summary/ 저장
+```
+
+### 3.2.1 병렬 상세 분석 흐름 (v2.9.16)
+```
+[Ctrl+Shift+G: 모델 복수 체크 + 레인 수 선택] → [ParallelAllRoomsDetailWorker (코디네이터)]
+       │
+       ├─ 레인 1~4 (ThreadPoolExecutor): 방 단위 병렬
+       │    └─ LLM 호출 (제공자별 세마포어, 동시 2건 상한) → HTML 파일 저장만
+       │
+       └─ 코디네이터 (단독 DB 쓰기자):
+            방 완료 이벤트 수신 → 방별 URL 동기화 (clear_urls_by_room → add_urls_batch, 직렬)
 ```
 
 ### 3.3 백업 흐름 (v2.9.11)

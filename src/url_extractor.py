@@ -334,6 +334,85 @@ def extract_urls_from_html(html_text: str) -> Dict[str, List[str]]:
     return dict(url_descriptions)
 
 
+def extract_room_urls_parallel(
+    storage,
+    room_name: str,
+    max_workers: int = 10,
+    cancel_check=None,
+    progress_callback=None
+) -> Dict[str, Dict[str, List[str]]]:
+    """
+    채팅방의 모든 상세 분석 HTML 파일을 멀티스레드로 병렬 로드 및 URL 추출 (NFS I/O 최적화).
+    
+    Args:
+        storage: FileStorage 인스턴스
+        room_name: 채팅방 이름
+        max_workers: 병렬 I/O 스레드 수 (기본 10)
+        cancel_check: () -> bool 취소 확인 콜백
+        progress_callback: (completed_count, total_count, date_str) -> None 진행률 콜백
+        
+    Returns:
+        {date_str: {url: [descriptions]}}
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    room_dir = storage.detail_dir / storage._sanitize_name(room_name)
+    if not room_dir.exists():
+        return {}
+
+    # 단 1회의 디렉터리 스캔으로 파일 목록 및 날짜 구성
+    date_file_pairs = []
+    for filepath in room_dir.glob("*_detail.html"):
+        m = re.search(r'_(\d{8})_detail\.html$', filepath.name)
+        if m:
+            compact = m.group(1)
+            d_str = f"{compact[:4]}-{compact[4:6]}-{compact[6:8]}"
+            date_file_pairs.append((d_str, filepath))
+
+    if not date_file_pairs:
+        return {}
+
+    date_file_pairs.sort(key=lambda x: x[0])
+    total_files = len(date_file_pairs)
+
+    def _read_and_extract(item):
+        if cancel_check and cancel_check():
+            return None
+        d_str, fpath = item
+        try:
+            html_text = fpath.read_text(encoding="utf-8")
+            if html_text:
+                extracted = extract_urls_from_html(html_text)
+                if extracted:
+                    return (d_str, extracted)
+        except Exception:
+            pass
+        return (d_str, {})
+
+    urls_by_date = {}
+    completed_count = 0
+    worker_count = min(max_workers, max(1, total_files))
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_to_date = {executor.submit(_read_and_extract, pair): pair[0] for pair in date_file_pairs}
+        for future in as_completed(future_to_date):
+            if cancel_check and cancel_check():
+                executor.shutdown(wait=False, cancel_futures=True)
+                break
+            d_str = future_to_date[future]
+            try:
+                res = future.result()
+                if res and res[1]:
+                    urls_by_date[res[0]] = res[1]
+            except Exception:
+                pass
+            completed_count += 1
+            if progress_callback:
+                progress_callback(completed_count, total_files, d_str)
+
+    return urls_by_date
+
+
 def save_urls_to_file(url_dict: Dict[str, List[str]], output_path: str, chatroom_name: str = "Unknown") -> None:
     """
     추출된 URL 목록을 파일로 저장합니다.

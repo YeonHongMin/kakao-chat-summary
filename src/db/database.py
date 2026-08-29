@@ -439,12 +439,42 @@ class Database:
         return url_id
     
     def add_urls_batch(self, room_id: int, urls: Dict[str, List[str]]) -> int:
-        """URL 일괄 추가."""
-        added = 0
-        for url, descriptions in urls.items():
-            self.add_url(room_id, url, descriptions)
-            added += 1
-        return added
+        """URL 일괄 추가 (단일 세션/트랜잭션으로 대폭 고속화)."""
+        if not urls:
+            return 0
+
+        with self.get_session() as session:
+            existing_list = session.query(URL).filter(URL.room_id == room_id).all()
+            existing_map = {u.url: u for u in existing_list}
+            
+            new_objs = []
+            now = datetime.now()
+
+            for url, descriptions in urls.items():
+                desc_str = " / ".join(descriptions) if descriptions else ""
+                if url in existing_map:
+                    existing_obj = existing_map[url]
+                    existing_descs = set(existing_obj.descriptions.split(" / ")) if existing_obj.descriptions else set()
+                    new_descs = set(descriptions) if descriptions else set()
+                    merged = existing_descs | new_descs
+                    merged.discard("")
+                    existing_obj.descriptions = " / ".join(sorted(merged))
+                    existing_obj.updated_at = now
+                else:
+                    new_objs.append(
+                        URL(
+                            room_id=room_id,
+                            url=url,
+                            descriptions=desc_str,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+
+            if new_objs:
+                session.add_all(new_objs)
+
+            return len(urls)
     
     def get_urls_by_room(self, room_id: int) -> Dict[str, List[str]]:
         """채팅방의 URL 목록 조회."""

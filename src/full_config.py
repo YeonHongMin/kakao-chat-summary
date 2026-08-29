@@ -46,6 +46,8 @@ class LLMProvider:
     # API별 출력 한도 JSON 필드 (잘못된 필드 → 서버 기본값으로 잘림 방지)
     max_tokens_api_field: str = "max_tokens"
     thinking_disabled: bool = False  # thinking 기본 ON API용
+    # 병렬 상세 분석 시 동일 제공자 동시 호출 상한 (rate limit 429 방지, v2.9.16)
+    max_concurrency: int = 2
 
 
 # 한글 대화 기준 토큰→문자 근사 (Z.AI 문서: 1 token ≈ 1.5 한글자)

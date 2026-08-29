@@ -880,6 +880,256 @@ class AllRoomsDetailWorker(QThread):
             self.finished.emit(False, f"오류: {str(e)}")
 
 
+class ParallelAllRoomsDetailWorker(QThread):
+    """전체 채팅방 상세 분석 병렬 생성 워커 (v2.9.16).
+
+    설계 원칙 (NFS SQLite 안전):
+    - 채팅방 단위 레인(Lane) 병렬: 한 방의 날짜는 해당 레인에서 순차 처리
+    - 레인 스레드는 LLM 호출 + HTML 파일 저장만 수행 (DB 접근 금지)
+    - DB 쓰기(방별 URL 동기화)는 코디네이터(run) 스레드가 단독 직렬 수행
+    - 제공자별 세마포어로 동일 제공자 동시 호출 상한 적용 (rate limit 방지)
+    """
+    progress = Signal(int, str)
+    finished = Signal(bool, str)
+
+    def __init__(self, rooms: list, llm_providers: list, max_lanes: int = 3):
+        """
+        Args:
+            rooms: [(room_id, room_name), ...] 리스트 (정렬된 순서)
+            llm_providers: 사용할 LLM 제공자 키 리스트 (라운드로빈 배정)
+            max_lanes: 동시 실행 레인 수 (1~4)
+        """
+        super().__init__()
+        self.rooms = rooms
+        self.llm_providers = llm_providers or ["minimax"]
+        self.max_lanes = max(1, min(int(max_lanes), 4))
+        self.storage = get_storage()
+        self._cancel_event = threading.Event()
+        self._status_lock = threading.Lock()
+        self._lane_status: dict = {}   # {lane_key: "방명 MM-DD(모델)"}
+        self._done_dates = 0
+        self._total_dates = 0
+
+    def cancel(self):
+        self._cancel_event.set()
+
+    def _emit_progress(self):
+        """레인 현황 + 전체 진행률을 상태바 메시지로 전달."""
+        with self._status_lock:
+            lanes = [s for s in self._lane_status.values() if s]
+            done = self._done_dates
+        pct = min(int(done * 100 / max(1, self._total_dates)), 99)
+        lane_msg = " · ".join(lanes) if lanes else "대기 중"
+        self.progress.emit(
+            pct,
+            f"⏳ {len(lanes)}레인 | {lane_msg} — {done}/{self._total_dates}일"
+        )
+
+    def _process_room(self, room_task: tuple) -> tuple:
+        """레인 작업: 한 채팅방의 필요 날짜를 순차 처리 (파일 저장만, DB 금지).
+
+        Returns:
+            (room_id, room_name, provider_key, success, fail, cancelled)
+        """
+        room_id, room_name, dates_needing, provider_key, semaphore, llm_display = room_task
+        lane_key = threading.get_ident()
+        success = 0
+        fail = 0
+
+        from detail_prompt import call_detail_llm, wrap_detail_html
+
+        try:
+            for date_str in sorted(dates_needing):
+                if self._cancel_event.is_set():
+                    return (room_id, room_name, provider_key, success, fail, True)
+
+                with self._status_lock:
+                    self._lane_status[lane_key] = f"{room_name} {date_str[5:]}({llm_display})"
+                self._emit_progress()
+
+                messages = self.storage.load_daily_original(room_name, date_str)
+                if not messages:
+                    fail += 1
+                    with self._status_lock:
+                        self._done_dates += 1
+                    continue
+
+                chat_content = "\n".join(messages)
+
+                # 동일 제공자 동시 호출 상한 (세마포어)
+                with semaphore:
+                    if self._cancel_event.is_set():
+                        return (room_id, room_name, provider_key, success, fail, True)
+                    result = call_detail_llm(
+                        chat_content, room_name, date_str, provider_key,
+                        cancel_event=self._cancel_event,
+                    )
+
+                if result.get("cancelled") or self._cancel_event.is_set():
+                    return (room_id, room_name, provider_key, success, fail, True)
+
+                if result["success"]:
+                    html = wrap_detail_html(
+                        result["content"], room_name, date_str, llm_display
+                    )
+                    self.storage.save_detail_summary(
+                        room_name, date_str, html, llm_display
+                    )
+                    success += 1
+                else:
+                    fail += 1
+
+                with self._status_lock:
+                    self._done_dates += 1
+                self._emit_progress()
+
+            return (room_id, room_name, provider_key, success, fail, False)
+        finally:
+            with self._status_lock:
+                self._lane_status.pop(lane_key, None)
+
+    def run(self):
+        try:
+            import sys
+            from pathlib import Path as _Path
+            sys.path.insert(0, str(_Path(__file__).parent.parent))
+
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            from full_config import LLM_PROVIDERS
+
+            # 1) 방별 필요 날짜 수집 및 전체 작업량 계산
+            room_tasks_raw = []  # (room_id, room_name, dates_needing)
+            total_skip = 0
+            skipped_rooms = []
+            for room_id, room_name in self.rooms:
+                if self._cancel_event.is_set():
+                    break
+                available = self.storage.get_available_dates(room_name)
+                dates_needing = [
+                    d for d in available
+                    if not self.storage.has_detail_summary(room_name, d)
+                ]
+                if dates_needing:
+                    room_tasks_raw.append((room_id, room_name, dates_needing))
+                    self._total_dates += len(dates_needing)
+                else:
+                    total_skip += len(available)
+                    skipped_rooms.append(room_name)
+
+            if not room_tasks_raw:
+                self.finished.emit(True, "모든 채팅방의 상세 분석이 이미 완료되어 있습니다.")
+                return
+
+            # 2) 제공자 라운드로빈 배정 + 제공자별 세마포어 생성
+            valid_providers = [p for p in self.llm_providers if p in LLM_PROVIDERS]
+            if not valid_providers:
+                valid_providers = ["minimax"]
+
+            semaphores = {
+                p: threading.Semaphore(max(1, LLM_PROVIDERS[p].max_concurrency))
+                for p in valid_providers
+            }
+
+            room_tasks = []
+            for idx, (room_id, room_name, dates_needing) in enumerate(room_tasks_raw):
+                provider_key = valid_providers[idx % len(valid_providers)]
+                llm_info = LLM_PROVIDERS[provider_key]
+                room_tasks.append((
+                    room_id, room_name, dates_needing,
+                    provider_key, semaphores[provider_key], llm_info.name,
+                ))
+
+            self._emit_progress()
+
+            # 3) 레인 병렬 실행 (방 단위) + 코디네이터 단독 DB 쓰기
+            total_success = 0
+            total_fail = 0
+            cancelled = False
+            results = []  # (room_name, provider_display, success, fail)
+
+            # 코디네이터 전용 DB 인스턴스 (레인은 DB 접근 안 함)
+            from db.database import Database
+            coordinator_db = Database()
+
+            try:
+                lane_count = min(self.max_lanes, len(room_tasks))
+                with ThreadPoolExecutor(max_workers=lane_count) as executor:
+                    future_map = {
+                        executor.submit(self._process_room, task): task[1]
+                        for task in room_tasks
+                    }
+                    for future in as_completed(future_map):
+                        try:
+                            room_id, room_name, provider_key, s, f, was_cancelled = future.result()
+                        except Exception as lane_err:
+                            logger.warning(f"[병렬 상세] {future_map[future]} 레인 오류: {lane_err}")
+                            total_fail += 1
+                            continue
+
+                        llm_display = LLM_PROVIDERS[provider_key].name
+                        total_success += s
+                        total_fail += f
+                        results.append((room_name, llm_display, s, f))
+                        cancelled = cancelled or was_cancelled
+
+                        # 코디네이터 단독 DB 쓰기: 방 완료 직후 URL 동기화 (직렬)
+                        if s > 0 and room_id and not self._cancel_event.is_set():
+                            try:
+                                self._sync_room_urls(coordinator_db, room_id, room_name)
+                            except Exception as sync_err:
+                                logger.warning(f"[병렬 상세] {room_name} URL 동기화 실패: {sync_err}")
+            finally:
+                coordinator_db.engine.dispose()
+
+            self.progress.emit(100, "완료!")
+
+            # 4) 결과 메시지
+            lines = [f"🔍 전체 채팅방 상세 분석 완료 (병렬 {self.max_lanes}레인, {len(valid_providers)}개 모델)\n"]
+            for rn, llm_d, s, f in sorted(results, key=lambda x: x[0]):
+                parts = []
+                if s > 0:
+                    parts.append(f"✅ {s}일")
+                if f > 0:
+                    parts.append(f"❌ {f}일")
+                if parts:
+                    lines.append(f"  • {rn} [{llm_d}]: {' / '.join(parts)}")
+            for rn in skipped_rooms:
+                lines.append(f"  • {rn}: ⏭️ 완료됨")
+
+            lines.append(f"\n합계: ✅ {total_success}일 완료 | ⏭️ {total_skip}일 건너뜀 | ❌ {total_fail}일 실패")
+            if cancelled or self._cancel_event.is_set():
+                lines.append("⚠️ 사용자 취소")
+
+            self.finished.emit(True, "\n".join(lines))
+
+        except Exception as e:
+            logger.exception("병렬 전체 상세 분석 오류")
+            self.finished.emit(False, f"오류: {str(e)}")
+
+    def _sync_room_urls(self, db, room_id: int, room_name: str):
+        """방별 URL 동기화 — 코디네이터 스레드에서만 호출 (단일 DB 쓰기자)."""
+        from datetime import date as _date, timedelta as _timedelta
+        from url_extractor import extract_room_urls_parallel, deduplicate_urls, merge_urls_by_date
+
+        today = _date.today()
+        urls_by_date = extract_room_urls_parallel(
+            self.storage, room_name, max_workers=10,
+            cancel_check=lambda: self._cancel_event.is_set(),
+        )
+        if not urls_by_date:
+            return
+
+        urls_recent = deduplicate_urls(merge_urls_by_date(urls_by_date, today - _timedelta(days=3)))
+        urls_weekly = deduplicate_urls(merge_urls_by_date(urls_by_date, today - _timedelta(days=7)))
+        urls_all = deduplicate_urls(merge_urls_by_date(urls_by_date))
+
+        if urls_all:
+            db.clear_urls_by_room(room_id)
+            db.add_urls_batch(room_id, urls_all)
+            self.storage.save_url_lists(room_name, urls_recent, urls_weekly, urls_all)
+            logger.info(f"[병렬 상세/URL] {room_name}: {len(urls_all)}개 URL 동기화")
+
+
 class AllRoomsUrlSyncWorker(QThread):
     """전체 채팅방 URL 동기화 워커."""
     progress = Signal(int, str)
@@ -901,7 +1151,7 @@ class AllRoomsUrlSyncWorker(QThread):
             sys.path.insert(0, str(Path(__file__).parent.parent))
 
             from db.database import Database
-            from url_extractor import extract_urls_from_html, deduplicate_urls, merge_urls_by_date
+            from url_extractor import extract_room_urls_parallel, deduplicate_urls, merge_urls_by_date
             from datetime import date, timedelta
 
             self.progress.emit(5, "전체 채팅방 URL 스캔 중...")
@@ -932,23 +1182,16 @@ class AllRoomsUrlSyncWorker(QThread):
 
                 self.progress.emit(
                     progress_pct,
-                    f"[{room_idx+1}/{total_rooms}] {room_name} URL 수집 중..."
+                    f"[{room_idx+1}/{total_rooms}] {room_name} URL 병렬 수집 중..."
                 )
 
-                # 상세 분석 날짜 목록 로드 (v2.9.0)
-                detail_dates = self.storage.get_summarized_dates(room_name)
-                if not detail_dates:
-                    room_results.append(f"⏭️ {room_name}: 상세 분석 없음")
-                    continue
-
-                # 날짜별 URL 추출 (상세 분석 HTML에서)
-                urls_by_date = {}
-                for date_str in sorted(detail_dates):
-                    detail_html = self.storage.load_detail_summary(room_name, date_str)
-                    if detail_html:
-                        urls = extract_urls_from_html(detail_html)
-                        if urls:
-                            urls_by_date[date_str] = urls
+                # 멀티스레드 병렬 파일 I/O 및 URL 추출 (NFS 최적화)
+                urls_by_date = extract_room_urls_parallel(
+                    self.storage,
+                    room_name,
+                    max_workers=10,
+                    cancel_check=lambda: self._cancelled,
+                )
 
                 if not urls_by_date:
                     room_results.append(f"⏭️ {room_name}: URL 없음")
@@ -960,7 +1203,7 @@ class AllRoomsUrlSyncWorker(QThread):
                 urls_all = deduplicate_urls(merge_urls_by_date(urls_by_date))
 
                 if urls_all:
-                    # DB 저장
+                    # DB 저장 (단일 트랜잭션 벌크 저장)
                     try:
                         worker_db.clear_urls_by_room(room_id)
                         worker_db.add_urls_batch(room_id, urls_all)
@@ -1038,12 +1281,12 @@ class RoomListLoadWorker(QThread):
         from db.database import Database
         worker_db = Database()
         try:
-            self.progress.emit(10, "데이터베이스 연결 확인 중...")
+            self.progress.emit(3, "데이터베이스 연결 확인 중...")
             from db.models import ChatRoom, Message
-            from sqlalchemy import select, func
+            from sqlalchemy import func
 
             with worker_db.get_session() as session:
-                self.progress.emit(25, "채팅방 목록 확인 중...")
+                self.progress.emit(8, "채팅방 목록 확인 중...")
                 rooms = session.query(ChatRoom).all()
                 total_rooms = len(rooms)
 
@@ -1052,36 +1295,29 @@ class RoomListLoadWorker(QThread):
                     self.finished.emit([], "")
                     return
 
-                self.progress.emit(40, f"{total_rooms}개 채팅방 메시지 집계 준비 중...")
-
-                # 서브쿼리로 단일 쿼리 집계
-                msg_count_subq = (
-                    select(Message.room_id, func.count(Message.id).label('msg_count'))
-                    .group_by(Message.room_id)
-                    .subquery()
-                )
-                
-                self.progress.emit(65, "대용량 메시지 통계 집계 중...")
-                rows = (
-                    session.query(
-                        ChatRoom,
-                        func.coalesce(msg_count_subq.c.msg_count, 0).label('msg_count'),
+                # 방 단위 개별 집계로 실제 진행률 보고 (v2.9.16: 가상 % 제거)
+                # (room_id, ...) 유니크 인덱스를 타므로 단일 GROUP BY 쿼리와 총 비용 동등
+                rooms_with_counts = []
+                for idx, r in enumerate(rooms):
+                    msg_count = (
+                        session.query(func.count(Message.id))
+                        .filter(Message.room_id == r.id)
+                        .scalar()
+                    ) or 0
+                    rooms_with_counts.append(
+                        (
+                            ChatRoom(
+                                id=r.id, name=r.name, file_path=r.file_path,
+                                last_sync_at=r.last_sync_at, created_at=r.created_at,
+                            ),
+                            int(msg_count),
+                        )
                     )
-                    .outerjoin(msg_count_subq, ChatRoom.id == msg_count_subq.c.room_id)
-                    .all()
-                )
-
-                self.progress.emit(90, "메모리 캐시 생성 중...")
-                rooms_with_counts = [
-                    (
-                        ChatRoom(
-                            id=r.id, name=r.name, file_path=r.file_path,
-                            last_sync_at=r.last_sync_at, created_at=r.created_at,
-                        ),
-                        int(count),
+                    pct = 8 + int((idx + 1) * 90 / total_rooms)  # 8 → 98 실측 진행
+                    self.progress.emit(
+                        pct,
+                        f"[{idx+1}/{total_rooms}] {r.name} 메시지 집계 중..."
                     )
-                    for r, count in rows
-                ]
 
                 self.progress.emit(100, "로딩 완료!")
                 self.finished.emit(rooms_with_counts, "")
@@ -1492,11 +1728,18 @@ class MainWindow(QMainWindow):
         self.summary_source_room_id: Optional[int] = None
         self.detail_worker: Optional[DetailSummaryWorker] = None
         self.detail_batch_worker: Optional[DetailBatchWorker] = None
-        self.all_rooms_detail_worker: Optional[AllRoomsDetailWorker] = None
+        self.all_rooms_detail_worker = None  # AllRoomsDetailWorker | ParallelAllRoomsDetailWorker
         self.url_load_worker: Optional[UrlLoadWorker] = None
         self._url_load_seq: int = 0
         self.backup_worker: Optional[BackupWorker] = None
         self.room_list_worker: Optional[RoomListLoadWorker] = None
+        self._pending_delete_room: Optional[tuple] = None  # 백업 후 삭제 대기 (room_id, room_name)
+
+        # 채팅방 목록 로딩 카드 (실제 진행률 표시, v2.9.16)
+        self._room_loading_card = None
+        self._room_loading_text = None
+        self._room_loading_pbar = None
+        self._room_loading_sub = None
 
         # 채팅방 데이터 캐시 — 같은 방 재클릭 시 I/O 스킵 & 인메모리 정렬
         self._room_cache: dict = {}  # {room_id: {"stats": ..., "loaded": True}}
@@ -1605,6 +1848,7 @@ class MainWindow(QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setStyleSheet("QScrollArea { border: none; background-color: #F5F5F5; }")
+        self.room_list_scroll = scroll  # 스크롤 위치 보존용 (v2.9.16)
         left_layout.addWidget(scroll, 1)
         
         # 채팅방 만들기 버튼
@@ -2355,9 +2599,36 @@ class MainWindow(QMainWindow):
     def _show_room_list_loading(
         self,
         message: str = "채팅방 목록을 불러오는 중...",
-        percent: Optional[int] = None
+        percent: Optional[int] = None,
+        sub_text: Optional[str] = None
     ):
-        """채팅방 목록 영역에 카카오 스타일 로딩 카드 및 진행률 표시."""
+        """채팅방 목록 영역에 카카오 스타일 로딩 카드 및 진행률 표시.
+
+        v2.9.16: 카드를 매번 재생성하지 않고 갱신. 게이지는 워커가 보고하는
+        실제 진행률(방 단위 집계 실측치)만 표시한다 — 가상 % 없음.
+        """
+        real_pct = int(percent) if isinstance(percent, (int, float)) and percent >= 0 else None
+
+        # 기존 카드가 살아있으면 라벨/게이지만 갱신
+        card_alive = False
+        if getattr(self, "_room_loading_card", None) is not None:
+            try:
+                self._room_loading_text.setText(message)
+                if real_pct is not None:
+                    self._room_loading_pbar.setRange(0, 100)
+                    self._room_loading_pbar.setValue(real_pct)
+                if sub_text is not None:
+                    self._room_loading_sub.setText(sub_text)
+                elif real_pct is not None:
+                    self._room_loading_sub.setText(f"{real_pct}%")
+                card_alive = True
+            except RuntimeError:
+                # C++ 위젯이 이미 삭제된 경우 → 새로 생성
+                card_alive = False
+
+        if card_alive:
+            return
+
         while self.room_list_layout.count() > 1:
             item = self.room_list_layout.takeAt(0)
             if item.widget():
@@ -2403,19 +2674,38 @@ class MainWindow(QMainWindow):
                 border-radius: 4px;
             }
         """)
-        if percent is not None and percent >= 0:
-            pbar.setValue(percent)
+        if real_pct is not None:
+            pbar.setValue(real_pct)
         else:
             pbar.setRange(0, 0)  # 무한 로딩 인디케이터
         card_layout.addWidget(pbar)
 
-        pct_text = f"{percent}%" if percent is not None and percent >= 0 else "대용량 DB 조회 중..."
+        if sub_text is not None:
+            pct_text = sub_text
+        elif real_pct is not None:
+            pct_text = f"{real_pct}%"
+        else:
+            pct_text = "대용량 DB 조회 중..."
         sub_label = QLabel(pct_text)
         sub_label.setAlignment(Qt.AlignCenter)
         sub_label.setStyleSheet("color: #888888; font-size: 11px; background: transparent; border: none;")
         card_layout.addWidget(sub_label)
 
         self.room_list_layout.insertWidget(0, loading_card)
+
+        # 카드/게이지 참조 저장 (다음 진행률 갱신 시 재사용)
+        self._room_loading_card = loading_card
+        self._room_loading_text = text_label
+        self._room_loading_pbar = pbar
+        self._room_loading_sub = sub_label
+
+    def _stop_room_loading_anim(self, keep_refs: bool = False):
+        """로딩 카드 참조 정리 (목록 렌더링 직전 호출)."""
+        if not keep_refs:
+            self._room_loading_card = None
+            self._room_loading_text = None
+            self._room_loading_pbar = None
+            self._room_loading_sub = None
     
     def _load_rooms(self, force_db: bool = True):
         """채팅방 목록 로드 (비동기 DB 조회 또는 메모리 캐시)."""
@@ -2424,7 +2714,7 @@ class MainWindow(QMainWindow):
             return
 
         self._update_status("채팅방 목록 로드 중...", "working")
-        self._show_room_list_loading("채팅방 목록을 불러오는 중...", percent=10)
+        self._show_room_list_loading("채팅방 목록을 불러오는 중...", percent=0)
 
         if self.room_list_worker is not None and self.room_list_worker.isRunning():
             self.room_list_worker.terminate()
@@ -2436,15 +2726,15 @@ class MainWindow(QMainWindow):
         )
         self.room_list_worker.finished.connect(self._on_rooms_loaded)
         self.room_list_worker.start()
-        self.room_list_worker.start()
 
     def _on_rooms_loaded(self, rooms_with_counts: List[tuple], error_message: str):
         """채팅방 목록 비동기 로드 완료 콜백."""
         if error_message:
             logger.error(f"채팅방 목록 로드 오류: {error_message}")
             self._show_room_list_loading(
-                f"❌ 목록 로드 실패",
-                error_message
+                "❌ 목록 로드 실패",
+                percent=None,
+                sub_text=error_message
             )
             self._update_status("채팅방 목록 로드 실패", "error")
             return
@@ -2455,8 +2745,18 @@ class MainWindow(QMainWindow):
         if self.current_room_id:
             self._highlight_selected_room(self.current_room_id)
 
-    def _render_room_list(self):
-        """메모리에 캐시된 채팅방 목록을 정렬 모드에 맞추어 UI 렌더링."""
+    def _render_room_list(self, preserve_scroll: bool = True):
+        """메모리에 캐시된 채팅방 목록을 정렬 모드에 맞추어 UI 렌더링.
+
+        v2.9.16: 재렌더링 후 스크롤 위치를 복원하여 목록이 맨 위로 튀는 현상 방지.
+        """
+        self._stop_room_loading_anim()
+
+        # 스크롤 위치 저장
+        saved_scroll = 0
+        if preserve_scroll and getattr(self, "room_list_scroll", None) is not None:
+            saved_scroll = self.room_list_scroll.verticalScrollBar().value()
+
         # 기존 위젯 제거
         while self.room_list_layout.count() > 1:
             item = self.room_list_layout.takeAt(0)
@@ -2489,12 +2789,51 @@ class MainWindow(QMainWindow):
                 self.room_list_layout.count() - 1, widget
             )
 
+        # 레이아웃 정착 후 스크롤 위치 복원 (이벤트 루프 다음 틱)
+        if preserve_scroll and saved_scroll > 0 and getattr(self, "room_list_scroll", None) is not None:
+            QTimer.singleShot(
+                0,
+                lambda v=saved_scroll: self.room_list_scroll.verticalScrollBar().setValue(v)
+            )
+
+    def _refresh_room_in_cache(self, room_id: int) -> bool:
+        """특정 채팅방 1개만 DB에서 재조회하여 메모리 캐시 갱신 (전체 재집계 회피, v2.9.16).
+
+        업로드/상세분석 완료 후 전체 500MB DB 집계를 다시 돌리지 않고,
+        해당 방의 메시지 수와 정보만 단일 쿼리로 갱신한다.
+
+        Returns:
+            True = 캐시 갱신 성공 (부분 갱신 완료), False = 캐시 없음 (전체 로드 필요)
+        """
+        if not self._cached_rooms_with_counts:
+            return False
+
+        room = self.db.get_room_by_id(room_id)
+        if not room:
+            return False
+        new_count = self.db.get_message_count_by_room(room_id)
+
+        found = False
+        for i, (cached_room, _) in enumerate(self._cached_rooms_with_counts):
+            if cached_room.id == room_id:
+                self._cached_rooms_with_counts[i] = (room, new_count)
+                found = True
+                break
+        if not found:
+            # 새로 생성된 방 → 캐시에 추가
+            self._cached_rooms_with_counts.append((room, new_count))
+
+        self._render_room_list(preserve_scroll=True)
+        if self.current_room_id:
+            self._highlight_selected_room(self.current_room_id)
+        return True
+
     def _sort_rooms_with_counts(
         self, rooms_with_counts: List[tuple], sort_mode: str
     ) -> List[tuple]:
         """채팅방 목록 정렬."""
         if sort_mode == "name":
-            return sorted(rooms_with_counts, key=lambda x: x[0].name)
+            return sorted(rooms_with_counts, key=lambda x: (x[0].name or "").lower())
         if sort_mode == "updated":
             return sorted(
                 rooms_with_counts,
@@ -2669,17 +3008,22 @@ class MainWindow(QMainWindow):
             (storage.original_dir / storage._sanitize_name(room_name)).mkdir(parents=True, exist_ok=True)
             
             QMessageBox.information(self, "생성 완료", f"✅ '{room_name}' 채팅방이 생성되었습니다.\n\n이제 파일을 업로드하세요.")
-            self._invalidate_room_cache()
-            self._load_rooms()
+            # v2.9.16: 새 방 1개만 캐시에 추가 (전체 DB 재집계 회피)
+            if not self._refresh_room_in_cache(room.id):
+                self._invalidate_room_cache()
+                self._load_rooms()
             
         except Exception as e:
             QMessageBox.warning(self, "오류", f"채팅방 생성 실패: {str(e)}")
     
     @Slot()
     def _on_delete_room(self):
-        """채팅방 삭제 (파일 메뉴에서 호출)."""
+        """채팅방 삭제 (파일 메뉴에서 호출) — 백업 후 완전 삭제 지원 (v2.9.15)."""
         if self.current_room_id is None:
             QMessageBox.warning(self, "알림", "먼저 채팅방을 선택하세요.")
+            return
+
+        if self._busy_guard("채팅방 삭제"):
             return
 
         room = self.db.get_room_by_id(self.current_room_id)
@@ -2688,28 +3032,110 @@ class MainWindow(QMainWindow):
             return
 
         room_name = room.name
-        reply = QMessageBox.question(
-            self, "채팅방 삭제",
-            f"'{room_name}' 채팅방을 정말 삭제하시겠습니까?\n\n"
-            f"DB의 메시지, 요약, URL 데이터가 모두 삭제됩니다.\n"
-            f"(data/ 폴더의 파일은 유지됩니다)",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+        room_id = self.current_room_id
+
+        # 3가지 선택: 백업 후 완전 삭제(권장) / DB만 삭제 / 취소
+        box = QMessageBox(self)
+        box.setWindowTitle("채팅방 삭제")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(
+            f"'{room_name}' 채팅방을 삭제합니다.\n\n"
+            "💾 백업 후 완전 삭제 (권장):\n"
+            "   data/backup/에 백업 후 DB + 파일(원본/상세분석/URL) 모두 삭제\n"
+            "   → 고아 디렉터리가 남지 않습니다.\n\n"
+            "🗑️ DB만 삭제:\n"
+            "   DB 데이터만 삭제하고 data/ 파일은 유지\n"
+            "   → 파일이 고아로 남아 '누락 채팅방 DB 추가'로 복구 가능"
         )
-        if reply != QMessageBox.Yes:
+        backup_delete_btn = box.addButton("💾 백업 후 완전 삭제", QMessageBox.ButtonRole.AcceptRole)
+        db_only_btn = box.addButton("🗑️ DB만 삭제", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn = box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(backup_delete_btn)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked is cancel_btn:
             return
 
+        if clicked is backup_delete_btn:
+            # 백업 완료 후 파일 + DB 삭제 (체인)
+            self._pending_delete_room = (room_id, room_name)
+            self._start_backup_worker("room", room_name, on_finished=self._on_backup_for_delete_finished)
+            return
+
+        # DB만 삭제 (기존 동작)
         try:
-            self.db.delete_room(self.current_room_id)
-            self.current_room_id = None
-            self.current_room_file = None
-            self.header_label.setText("📊 대시보드")
-            self.summary_browser.setHtml("<p style='color: #888;'>채팅방을 선택하세요.</p>")
-            self._invalidate_room_cache()
-            self._load_rooms()
-            self._update_status(f"'{room_name}' 채팅방 삭제 완료", "success")
+            self.db.delete_room(room_id)
+            self._after_room_deleted(room_name, files_deleted=False)
         except Exception as e:
             QMessageBox.warning(self, "오류", f"채팅방 삭제 실패: {str(e)}")
+
+    @Slot(bool, str)
+    def _on_backup_for_delete_finished(self, success: bool, result: str):
+        """채팅방 삭제 전 백업 완료 콜백 — 성공 시에만 파일+DB 완전 삭제."""
+        self._summary_in_progress = False
+        self._hide_status_progress()
+
+        pending = getattr(self, "_pending_delete_room", None)
+        self._pending_delete_room = None
+
+        if not pending:
+            return
+        room_id, room_name = pending
+
+        if not success:
+            if result == "취소됨":
+                self._update_status("백업 취소 — 채팅방 삭제 중단", "warning")
+                QMessageBox.information(
+                    self, "채팅방 삭제 중단",
+                    "백업이 취소되어 채팅방 삭제를 중단했습니다.\n데이터는 변경되지 않았습니다."
+                )
+            else:
+                self._update_status("백업 실패 — 채팅방 삭제 중단", "error")
+                QMessageBox.warning(
+                    self, "채팅방 삭제 중단",
+                    f"❌ 백업에 실패하여 삭제를 중단했습니다.\n데이터는 변경되지 않았습니다.\n\n{result}"
+                )
+            return
+
+        # 백업 성공 → 파일 디렉터리 + DB 삭제
+        try:
+            import shutil
+            sanitized = self.storage._sanitize_name(room_name)
+            for base_dir in [
+                self.storage.original_dir,
+                self.storage.summary_dir,
+                self.storage.detail_dir,
+                self.storage.url_dir,
+            ]:
+                room_dir = base_dir / sanitized
+                if room_dir.exists():
+                    shutil.rmtree(room_dir, ignore_errors=True)
+
+            self.db.delete_room(room_id)
+            self._after_room_deleted(room_name, files_deleted=True, backup_path=result)
+        except Exception as e:
+            QMessageBox.warning(self, "오류", f"채팅방 삭제 실패: {str(e)}")
+
+    def _after_room_deleted(self, room_name: str, files_deleted: bool, backup_path: str = ""):
+        """채팅방 삭제 후 UI 정리 공통 처리."""
+        self.current_room_id = None
+        self.current_room_file = None
+        self.header_label.setText("📊 대시보드")
+        self.summary_browser.setHtml("<p style='color: #888;'>채팅방을 선택하세요.</p>")
+        self._invalidate_room_cache()
+        self._load_rooms()
+
+        if files_deleted:
+            self._update_status(f"'{room_name}' 백업 후 완전 삭제 완료", "success")
+            QMessageBox.information(
+                self, "삭제 완료",
+                f"✅ '{room_name}' 채팅방이 완전히 삭제되었습니다.\n\n"
+                f"💾 백업 위치:\n{backup_path}\n\n"
+                "복원이 필요하면 도구 → '📂 채팅방 복원...'을 사용하세요."
+            )
+        else:
+            self._update_status(f"'{room_name}' 채팅방 삭제 완료 (파일 유지)", "success")
 
     @Slot()
     def _on_upload_file(self):
@@ -2756,9 +3182,15 @@ class MainWindow(QMainWindow):
         if success:
             self._update_status("업로드 완료", "success")
             QMessageBox.information(self, "업로드 완료", message)
-            self._invalidate_room_cache()
-            self._load_rooms()
-            
+
+            # v2.9.16: 전체 DB 재집계 대신 해당 방만 부분 갱신 (스크롤 위치 유지, 로딩 카드 없음)
+            self._invalidate_room_cache(room_id if room_id > 0 else None)
+            refreshed = False
+            if room_id > 0:
+                refreshed = self._refresh_room_in_cache(room_id)
+            if not refreshed:
+                self._load_rooms()
+
             # 새로 추가된 채팅방 선택
             if room_id > 0:
                 room = self.db.get_room_by_id(room_id)
@@ -3005,7 +3437,38 @@ class MainWindow(QMainWindow):
         )
         current_idx = llm_keys.index(pref) if pref in llm_keys else 0
         llm_combo.setCurrentIndex(current_idx)
-        form.addRow("LLM:", llm_combo)
+        form.addRow("기본 LLM:", llm_combo)
+
+        # 병렬 처리 옵션 (v2.9.16)
+        from PySide6.QtWidgets import QListWidget, QListWidgetItem, QSpinBox
+
+        llm_multi_list = QListWidget()
+        llm_multi_list.setMaximumHeight(110)
+        llm_multi_list.setToolTip(
+            "병렬 실행 시 사용할 모델들 (체크된 모델을 채팅방에 라운드로빈 배정).\n"
+            "아무것도 체크하지 않으면 위의 '기본 LLM' 하나만 사용합니다."
+        )
+        for key, item_label in zip(llm_keys, llm_items):
+            lw_item = QListWidgetItem(item_label)
+            lw_item.setFlags(lw_item.flags() | Qt.ItemIsUserCheckable)
+            lw_item.setCheckState(Qt.Checked if key == pref else Qt.Unchecked)
+            lw_item.setData(Qt.UserRole, key)
+            llm_multi_list.addItem(lw_item)
+        form.addRow("병렬 모델:", llm_multi_list)
+
+        lane_spin = QSpinBox()
+        lane_spin.setRange(1, 4)
+        lane_spin.setValue(3)
+        lane_spin.setToolTip(
+            "동시에 처리할 채팅방 수 (레인).\n"
+            "1 = 기존 순차 처리와 동일. 같은 모델은 동시 2건까지만 호출됩니다."
+        )
+        form.addRow("동시 실행 레인:", lane_spin)
+
+        hint_label = QLabel("ℹ️ 레인 2개 이상이면 병렬 처리됩니다. 같은 제공자는 동시 2건 상한.")
+        hint_label.setStyleSheet("color: #888888; font-size: 11px;")
+        form.addRow("", hint_label)
+
         dlg_layout.addLayout(form)
 
         btn_layout = QHBoxLayout()
@@ -3023,8 +3486,21 @@ class MainWindow(QMainWindow):
             return
 
         selected_llm = llm_keys[llm_combo.currentIndex()]
-        llm_display_name = llm_combo.currentText()
         selected_sort = sort_combo.currentData()
+
+        # 병렬 모델 선택: 체크된 모델 목록 (없으면 기본 LLM 1개)
+        selected_llms = []
+        for i in range(llm_multi_list.count()):
+            item = llm_multi_list.item(i)
+            if item.checkState() == Qt.Checked:
+                selected_llms.append(item.data(Qt.UserRole))
+        if not selected_llms:
+            selected_llms = [selected_llm]
+        max_lanes = lane_spin.value()
+
+        llm_display_name = " + ".join(
+            LLM_PROVIDERS[k].name for k in selected_llms
+        )
 
         # 선택된 정렬 순서대로 최종 대상 채팅방 목록 구성
         final_sorted = _sort_summary_room_info(room_info, selected_sort)
@@ -3040,9 +3516,12 @@ class MainWindow(QMainWindow):
         self.statusbar.insertPermanentWidget(0, self.summary_progress_widget)
         self.summary_progress_widget.show()
 
-        self._update_status("🔍 전체 채팅방 상세 분석 중...", "working")
+        self._update_status(f"🔍 전체 채팅방 상세 분석 중... ({max_lanes}레인)", "working")
 
-        self.all_rooms_detail_worker = AllRoomsDetailWorker(target_rooms, selected_llm)
+        # v2.9.16: 병렬 워커로 통합 (레인 1 = 순차와 동일 동작)
+        self.all_rooms_detail_worker = ParallelAllRoomsDetailWorker(
+            target_rooms, selected_llms, max_lanes=max_lanes
+        )
         self.all_rooms_detail_worker.progress.connect(
             self.summary_progress_widget.update_progress
         )
@@ -3243,8 +3722,10 @@ class MainWindow(QMainWindow):
         msg += "• 상세 분석 (data/detail_summary/)\n\n"
         
         if backups:
+            recent_b = backups[0]
+            recent_info = f" ({recent_b['size_mb']} MB)" if recent_b.get('size_mb', 0) > 0 else f" [{recent_b['created'].strftime('%Y-%m-%d %H:%M')}]" if 'created' in recent_b else ""
             msg += f"기존 백업: {len(backups)}개\n"
-            msg += f"최근: {backups[0]['name']} ({backups[0]['size_mb']} MB)\n"
+            msg += f"최근: {recent_b['name']}{recent_info}\n"
         
         reply = QMessageBox.question(
             self, "전체 백업",
@@ -3318,8 +3799,14 @@ class MainWindow(QMainWindow):
 
         self._start_backup_worker("room", room_name)
 
-    def _start_backup_worker(self, mode: str, room_name: str = ""):
-        """백업 워커를 시작하고 상태바 프로그레스를 표시한다."""
+    def _start_backup_worker(self, mode: str, room_name: str = "", on_finished=None):
+        """백업 워커를 시작하고 상태바 프로그레스를 표시한다.
+
+        Args:
+            mode: "full" | "room"
+            room_name: 채팅방 백업 시 대상 채팅방 이름
+            on_finished: 완료 시그널 커스텀 핸들러 (기본: _on_backup_finished)
+        """
         label = room_name if room_name else "전체"
         self._summary_in_progress = True
         self._update_status(f"'{label}' 백업 중...", "working")
@@ -3334,7 +3821,7 @@ class MainWindow(QMainWindow):
 
         self.backup_worker = BackupWorker(mode=mode, room_name=room_name)
         self.backup_worker.progress.connect(widget.update_progress)
-        self.backup_worker.finished.connect(self._on_backup_finished)
+        self.backup_worker.finished.connect(on_finished or self._on_backup_finished)
         widget.cancel_requested.connect(self.backup_worker.cancel)
         self.backup_worker.start()
 
@@ -3379,7 +3866,10 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QInputDialog
 
         backup_items = [
-            f"{b['name']} ({b['size_mb']} MB)" for b in backups
+            f"{b['name']} ({b['size_mb']} MB)" if b.get('size_mb', 0) > 0
+            else f"{b['name']} [{b['created'].strftime('%Y-%m-%d %H:%M')}]" if 'created' in b
+            else b['name']
+            for b in backups
         ]
 
         selected, ok = QInputDialog.getItem(
@@ -3460,7 +3950,10 @@ class MainWindow(QMainWindow):
 
         # 백업 선택
         backup_items = [
-            f"{b['name']} ({b['size_mb']} MB)" for b in backups
+            f"{b['name']} ({b['size_mb']} MB)" if b.get('size_mb', 0) > 0
+            else f"{b['name']} [{b['created'].strftime('%Y-%m-%d %H:%M')}]" if 'created' in b
+            else b['name']
+            for b in backups
         ]
 
         selected, ok = QInputDialog.getItem(
@@ -4219,24 +4712,17 @@ class MainWindow(QMainWindow):
         self.summary_source_room_id = None
 
     def _auto_sync_urls(self, room_id: int, room_name: str):
-        """상세 분석 완료 후 자동 URL 동기화 (v2.9.0: HTML 기반)."""
+        """상세 분석 완료 후 자동 URL 동기화 (v2.9.15: 멀티스레드 병렬 NFS 최적화)."""
         try:
             from file_storage import get_storage
+            from url_extractor import extract_room_urls_parallel, deduplicate_urls, merge_urls_by_date
             storage = get_storage()
 
             today = date.today()
             three_days_ago = today - timedelta(days=3)
             one_week_ago = today - timedelta(days=7)
 
-            urls_by_date = {}
-            detail_dates = storage.get_summarized_dates(room_name)
-
-            for date_str in sorted(detail_dates):
-                detail_html = storage.load_detail_summary(room_name, date_str)
-                if detail_html:
-                    urls = extract_urls_from_html(detail_html)
-                    if urls:
-                        urls_by_date[date_str] = urls
+            urls_by_date = extract_room_urls_parallel(storage, room_name, max_workers=10)
 
             # 같은 URL은 최신 날짜 설명만 유지 (누적 방지)
             urls_recent = deduplicate_urls(merge_urls_by_date(urls_by_date, three_days_ago))
@@ -4489,28 +4975,28 @@ class MainWindow(QMainWindow):
             today = date.today()
             three_days_ago = today - timedelta(days=3)
             one_week_ago = today - timedelta(days=7)
-    
-            # 날짜별 URL 추출 (상세 분석 HTML에서)
-            urls_by_date = {}
-            detail_dates = self.storage.get_summarized_dates(room_name)
-            total_dates = len(detail_dates)
-    
-            for i, date_str in enumerate(sorted(detail_dates)):
+
+            from url_extractor import extract_room_urls_parallel, deduplicate_urls, merge_urls_by_date
+
+            def _on_extract_progress(cur, total, date_str):
                 if self._url_sync_cancelled:
-                    self._update_status("URL 동기화 취소됨", "info")
-                    QMessageBox.information(self, "알림", "URL 동기화가 취소되었습니다.")
                     return
-                pct = int((i / max(1, total_dates)) * 80)
-                self.summary_progress_widget.update_progress(pct, f"{date_str} URL 추출 중... ({i+1}/{total_dates})")
+                pct = int((cur / max(1, total)) * 80)
+                self.summary_progress_widget.update_progress(pct, f"{date_str} URL 추출 중... ({cur}/{total})")
                 QApplication.processEvents()
-                
-                detail_html = self.storage.load_detail_summary(room_name, date_str)
-                if detail_html:
-                    urls = extract_urls_from_html(detail_html)
-                    if urls:
-                        urls_by_date[date_str] = urls
+
+            # 멀티스레드 병렬 파일 I/O 및 URL 추출 (NFS 최적화)
+            urls_by_date = extract_room_urls_parallel(
+                self.storage,
+                room_name,
+                max_workers=10,
+                cancel_check=lambda: self._url_sync_cancelled,
+                progress_callback=_on_extract_progress
+            )
             
             if self._url_sync_cancelled:
+                self._update_status("URL 동기화 취소됨", "info")
+                QMessageBox.information(self, "알림", "URL 동기화가 취소되었습니다.")
                 return
                 
             self.summary_progress_widget.update_progress(85, "URL 분류 및 중복 제거 중...")
@@ -4708,7 +5194,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.9.14</p>
+            <p>버전 2.9.16</p>
             <p>카카오톡 대화를 분석하고 AI로 상세 분석하는 도구입니다.</p>
             <p>제작자: 민연홍<br>
             <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>

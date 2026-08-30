@@ -13,6 +13,7 @@ import logging
 import threading
 from datetime import datetime
 from typing import Dict, Any, Optional
+from urllib.parse import unquote, urlparse
 
 import hanja
 import requests
@@ -41,7 +42,12 @@ DETAIL_PROMPT_TEMPLATE = """다음은 카카오톡 오픈채팅방 '{room_name}'
 <blockquote><p><strong>데이터:</strong> {room_name} 카카오톡 채팅 분석 | <strong>주요 키워드 TOP 20:</strong> 키워드1(빈도), 키워드2(빈도), ..., 키워드20(빈도) (대화에서 실제 등장한 키워드가 20개 미만이면 있는 만큼만 표기)</p></blockquote>
 <p>전체 대화의 핵심 흐름을 2~3문장으로 요약하는 개요 문단</p>
 
---- 아래를 토픽 수만큼 반복 (대화에서 논의된 모든 주제를 빠짐없이 토픽으로 만드세요. 대화량이 적어도 20개 이상, 많으면 30~40개 이상도 가능합니다. 짧은 언급이라도 독립 토픽으로 분리하세요. 토픽 수를 줄이지 마세요.) ---
+--- 아래를 토픽 수만큼 반복 ---
+**토픽 구성 (병합 우선, 약 20% 압축):**
+- 같은 도구·개념·이슈의 연속 토론은 1개 토픽으로 통합하세요. 개념/통계/증상/완화처럼 같은 주제를 쪼개지 마세요.
+- 인사, 출근, 날씨, 1~2줄 잡담은 독립 토픽으로 만들지 말고 연관 토픽에 한 줄로 흡수하세요.
+- 목표 토픽 수: 대화량이 많으면 20~32개, 적어도 핵심만 10~16개. 기존처럼 40~50개로 잘게 나누지 마세요.
+- 핵심 논의와 공유된 도구·URL은 빠짐없이 남기되, 같은 주제를 반복 토픽으로 늘리지 마세요.
 
 <h2>N. 토픽 제목</h2>
 <p>토픽 설명 3~5문장. 실제 발언자 @닉네임을 인용하여 근거를 제시하세요.</p>
@@ -92,6 +98,7 @@ DETAIL_PROMPT_TEMPLATE = """다음은 카카오톡 오픈채팅방 '{room_name}'
   - 짧은 URL(youtu.be/...), 리다이렉트 URL, 쿼리 파라미터가 긴 URL도 원본 그대로 포함
   - 단순 도메인 URL(예: https://www.minimax.io/)도 반드시 포함
   - 각 토픽의 근거 항목에 관련 URL이 있으면 <a href="URL">🔗</a>로 포함
+  - 깃허브 레포, 서비스, 웹사이트, 기사, 영상이 논의된 토픽의 근거(<li>) 끝에는 반드시 <a href="실제URL">🔗</a>를 넣으세요. URL 모음에만 넣고 본문에서 빼는 것은 금지입니다
   - "🔗 공유된 URL 모음" 섹션에 대화의 **모든 URL을 빠짐없이** 모아 정리 — 대화 텍스트를 처음부터 끝까지 스캔하여 URL을 하나씩 확인하세요
   - 각 URL은 <div class="url-card"> 구조를 사용하여 '내용', '시사점', '활용' 방안을 구체적으로 작성하고 공유자(@닉네임) 표기
   - **절대 주의사항:** `[이곳에 실제 원본 URL 삽입]` 처럼 제가 적어둔 플레이스홀더를 그대로 복사+붙여넣기 출력하지 마세요! 반드시 대화에서 찾은 **실제 주소(예: https://...)** 로 대체해야 합니다.
@@ -256,6 +263,159 @@ def clean_foreign_chars(content: str) -> str:
     # 또한 볼드체(**텍스트**) 변환
     content = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', content)
     return content
+
+
+_GENERIC_URL_KEYWORDS = frozenset({
+    "http", "https", "www", "com", "org", "net", "io", "co", "kr", "me", "so",
+    "html", "php", "asp", "htm", "news", "blog", "docs", "doc", "wiki",
+    "share", "status", "index", "home", "page", "view", "read", "article",
+    "slides", "shorts", "watch", "playlist", "youtube", "youtu", "github",
+    "twitter", "facebook", "instagram", "code", "app", "api", "repo",
+    "hugging", "face", "openai", "google", "apple", "amazon", "microsoft",
+    "페이지", "공식", "영상", "채널", "기사", "뉴스", "유튜브", "홈페이지",
+    "레포", "공유", "트윗", "자회사", "다이어그램", "슬라이드", "공식페이지",
+    "지식위키", "지식관리", "벤치마킹",
+})
+
+
+def _keyword_in_text(keyword: str, text: str) -> bool:
+    """본문에서 URL 키워드 매칭. 일반 단어는 경계, 하이픈/경로형은 부분 일치."""
+    if not keyword:
+        return False
+    if any(ch in keyword for ch in "-_/."):
+        return keyword in text
+    return re.search(rf"(?<![a-z0-9가-힣]){re.escape(keyword)}(?![a-z0-9가-힣])", text) is not None
+
+
+def _clean_extracted_url(url: str) -> str:
+    url = url.strip()
+    return re.sub(r"[`'\"~*_.,;:!?)\]}>\\|]+$", "", url)
+
+
+def _collect_known_urls(html_content: str, raw_text: str = "") -> list[tuple[str, str]]:
+    """url-card와 원본 대화에서 (url, 제목) 목록을 수집."""
+    seen: set[str] = set()
+    result: list[tuple[str, str]] = []
+
+    def add(url: str, title: str = "") -> None:
+        cleaned = _clean_extracted_url(url)
+        if len(cleaned) < 10 or not cleaned.startswith(("http://", "https://")):
+            return
+        if cleaned in seen:
+            return
+        seen.add(cleaned)
+        result.append((cleaned, title))
+
+    for card in re.finditer(r'<div\s+class="url-card">(.*?)</div>', html_content, re.DOTALL):
+        card_html = card.group(1)
+        href = re.search(r'<a\s+href="(https?://[^"]+)"', card_html)
+        if not href:
+            continue
+        title = ""
+        h3 = re.search(r"<h3>(.*?)</h3>", card_html, re.DOTALL)
+        if h3:
+            title = re.sub(r"<[^>]+>", "", h3.group(1))
+            title = re.sub(r"\(@[^)]+\)", "", title).strip()
+        add(href.group(1), title)
+
+    if raw_text:
+        for raw_url in re.findall(r'https?://[^\s<>"\')\]가-힣]+', raw_text):
+            add(raw_url, "")
+
+    return result
+
+
+def _keywords_for_url(url: str, title: str = "") -> list[str]:
+    """레포명·도메인·제목에서 본문 매칭용 키워드를 만든다."""
+    keywords: set[str] = set()
+    parsed = urlparse(url)
+    path = unquote(parsed.path).strip("/")
+    host = (parsed.netloc or "").split(":")[0].lower()
+    if host.startswith("www."):
+        host = host[4:]
+
+    if "github.com" in host:
+        parts = [p for p in path.split("/") if p]
+        if len(parts) >= 2:
+            owner, repo = parts[0], parts[1]
+            if repo.endswith(".git"):
+                repo = repo[:-4]
+            repo_l = repo.lower()
+            keywords.add(repo_l)
+            keywords.add(repo_l.replace("-", ""))
+            if "-" in repo_l:
+                keywords.add(repo_l.replace("-", " "))
+                for part in repo_l.split("-"):
+                    if len(part) >= 5 and part not in _GENERIC_URL_KEYWORDS:
+                        keywords.add(part)
+            keywords.add(f"{owner}/{repo}".lower())
+    else:
+        if host:
+            keywords.add(host)
+            base = host.split(".")[0]
+            if len(base) >= 4 and base not in _GENERIC_URL_KEYWORDS:
+                keywords.add(base)
+        if path:
+            last = path.split("/")[-1].split("?")[0]
+            last = re.sub(r"\.[a-zA-Z0-9]{1,5}$", "", last)
+            last_l = last.lower()
+            if len(last_l) >= 4 and not last.isdigit() and last_l not in _GENERIC_URL_KEYWORDS:
+                keywords.add(last_l)
+                if "-" in last_l:
+                    keywords.add(last_l.replace("-", " "))
+
+    if title:
+        # 제목은 제품/레포명(영문·하이픈)만 사용. 한글 일반명사는 오탐이 많다.
+        for word in re.findall(r"[A-Za-z0-9_\-.]{4,}", title):
+            word_l = word.lower()
+            if word_l in _GENERIC_URL_KEYWORDS:
+                continue
+            if len(word_l) >= 5 or "-" in word_l:
+                keywords.add(word_l)
+
+    return [k for k in keywords if len(k) >= 3 and k not in _GENERIC_URL_KEYWORDS]
+
+
+def auto_link_topics_in_html(html_content: str, raw_text: str = "") -> str:
+    """본문 토픽 <li>에 URL 모음/대화의 링크가 빠졌으면 🔗를 보정한다."""
+    known_urls = _collect_known_urls(html_content, raw_text)
+    if not known_urls:
+        return html_content
+
+    url_keywords: list[tuple[str, list[str]]] = []
+    for url, title in known_urls:
+        kws = _keywords_for_url(url, title)
+        if kws:
+            url_keywords.append((url, sorted(kws, key=len, reverse=True)))
+    if not url_keywords:
+        return html_content
+
+    split = re.search(r"<h2>(?:📊|🎯|🔗)", html_content)
+    if split:
+        topic_part = html_content[: split.start()]
+        bottom_part = html_content[split.start() :]
+    else:
+        topic_part = html_content
+        bottom_part = ""
+
+    def link_li(match: re.Match) -> str:
+        inner = match.group(1)
+        if "<a " in inner or "<a>" in inner:
+            return match.group(0)
+        li_lower = inner.lower()
+        matched: list[str] = []
+        for url, kws in url_keywords:
+            if any(_keyword_in_text(kw, li_lower) for kw in kws):
+                if url not in matched:
+                    matched.append(url)
+            if len(matched) >= 2:
+                break
+        if not matched:
+            return match.group(0)
+        tags = "".join(f' <a href="{url}">🔗</a>' for url in matched)
+        return f"<li>{inner}{tags}</li>"
+
+    return re.sub(r"<li>(.*?)</li>", link_li, topic_part, flags=re.DOTALL) + bottom_part
 
 
 def validate_detail_response(content: str) -> Dict[str, Any]:
@@ -505,9 +665,14 @@ def call_detail_llm(text: str, room_name: str, date_str: str,
                     content = message["reasoning_content"]
                 usage = data.get("usage", {})
 
-                # 추론 내용 제거 + 한자/일본어 후처리
+                # 추론 내용 제거 + 한자/일본어 후처리 + 본문 토픽 링크 보정
                 content = strip_reasoning(content)
                 content = clean_foreign_chars(content)
+                linked = auto_link_topics_in_html(content, text)
+                added_links = linked.count("<a href=") - content.count("<a href=")
+                if added_links > 0:
+                    logger.info(f"{_logpfx} [Detail] 본문 토픽 링크 {added_links}개 자동 보정")
+                content = linked
 
                 # finish_reason 체크
                 finish_reason = choice.get("finish_reason", "unknown")

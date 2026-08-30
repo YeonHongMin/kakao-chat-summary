@@ -1,6 +1,6 @@
 # 02. Technical Requirements Document (TRD)
 
-## 1. 시스템 아키텍처 (v2.9.16)
+## 1. 시스템 아키텍처 (v2.9.17)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -59,7 +59,7 @@ sys.exit(app.exec())
 ### 2.2 ui/main_window.py
 **역할**: 메인 GUI 윈도우
 
-**주요 클래스** (v2.9.16 기준):
+**주요 클래스** (v2.9.17 기준):
 | 클래스 | 설명 |
 |--------|------|
 | `MainWindow` | 메인 윈도우 (탭, 메뉴, 상태바). 기동 시 `_load_rooms()` QTimer 지연 |
@@ -221,6 +221,13 @@ sys.exit(app.exec())
 ### 2.9 chat_processor.py (제거됨, v2.9.0)
 기본 마크다운 요약 처리기는 삭제되었습니다. 상세 분석 응답 후처리는 `detail_prompt.py`가 담당합니다.
 
+| 함수 | 설명 |
+|------|------|
+| `generate_detail_prompt` | 토픽 병합(약 20% 압축) + 본문 `<li>` 링크 필수 규칙이 포함된 프롬프트 생성 (v2.9.17) |
+| `auto_link_topics_in_html` | URL 카드/원본 대화의 레포명·도메인 키워드로 본문 `<li>`에 누락된 🔗 보정 (v2.9.17) |
+| `call_detail_llm` | LLM 호출. 성공 시 `strip_reasoning` → `clean_foreign_chars` → `auto_link_topics_in_html` → 검증 |
+| `wrap_detail_html` | 다크 테마 HTML 래핑 |
+
 ---
 
 ### 2.10 import_to_db.py
@@ -285,6 +292,9 @@ python src/import_to_db.py <파일 또는 디렉터리> [--stats] [--daily]
        │
        ▼
 [call_detail_llm] → LLM API 호출 (cancel_event로 즉시 취소 가능)
+       │
+       ▼
+[후처리] strip_reasoning → clean_foreign_chars → auto_link_topics_in_html (v2.9.17)
        │
        ▼
 [응답 검증 + wrap_detail_html] → HTML 래핑

@@ -14,8 +14,8 @@
 | **언어** | Python 3.11+ |
 | **GUI** | PySide6 (Qt for Python) |
 | **DB** | SQLite + SQLAlchemy ORM |
-| **버전** | v2.9.16 |
-| **최종 업데이트** | 2026-08-29 |
+| **버전** | v2.9.17 |
+| **최종 업데이트** | 2026-08-30 |
 
 ---
 
@@ -36,7 +36,7 @@ kakao-chat-summary/
 │   ├── file_storage.py        # FileStorage 클래스
 │   ├── full_config.py         # Config 클래스 (LLM 설정)
 │   ├── parser.py              # KakaoLogParser 클래스
-│   ├── detail_prompt.py       # 상세 분석 프롬프트 + HTML 템플릿 + LLM API
+│   ├── detail_prompt.py       # 상세 분석 프롬프트 + HTML 템플릿 + LLM API + 본문 링크 보정 (v2.9.17)
 │   ├── url_extractor.py       # URL 추출 (마크다운 + HTML 파싱)
 │   ├── import_to_db.py        # DB import 유틸
 │   └── scheduler/
@@ -227,13 +227,14 @@ class URL(Base):
 - **진행 상황**: 실시간 진행률, 취소 가능 (v2.9.10: LLM API 대기 중 즉시 취소)
 
 ### 3. 상세 분석 HTML (유일한 요약 경로, v2.9.0)
-- **프롬프트** (`detail_prompt.py`): 토픽별 심층 분석, URL 모음, 감정/온도 분석, 핵심 시사점
+- **프롬프트** (`detail_prompt.py`): 토픽별 심층 분석(같은 주제 병합·약 20% 압축), URL 모음, 감정/온도 분석, 핵심 시사점
+- **본문 링크 보정** (v2.9.17): `auto_link_topics_in_html` — URL 카드/원본 대화 키워드로 토픽 `<li>`에 누락된 🔗 자동 삽입
 - **다크 테마 HTML**: `data/detail_summary/`에 저장, 브라우저에서 열기 지원
 - **생성 방식 3가지**:
   - 날짜 탭에서 단일 날짜 상세 생성 (`DetailSummaryWorker`)
   - 날짜 탭에서 일괄 상세 생성 (`DetailBatchWorker`)
   - 도구 메뉴에서 전체 채팅방 상세 분석 (`AllRoomsDetailWorker`, Ctrl+Shift+G)
-- **URL 처리**: 대화 내 모든 URL을 토픽별 근거 + "🔗 공유된 URL 모음" 섹션에 설명과 함께 정리
+- **URL 처리**: 대화 내 모든 URL을 토픽별 근거(`<li>` 🔗) + "🔗 공유된 URL 모음"에 정리. 본문 누락 시 `auto_link_topics_in_html` 보정 (v2.9.17)
 
 ### 4. 대시보드 탭
 - 채팅방 통계 (메시지 수, 참여자 수)
@@ -856,6 +857,11 @@ DB에 데이터가 있어도 파일이 없으면 재수집 대상이며, DB 저�
 
 ---
 
+### v2.9.17 - 토픽 병합·본문 링크 보정 (2026-08-30)
+- 🧩 **토픽 병합 프롬프트**: 같은 주제를 1개로 통합, 잡담은 연관 토픽에 흡수. 목표 토픽 수 약 20% 축소 (많으면 20~32개)
+- 🔗 **본문 URL 링크 필수**: 토픽 근거(`<li>`)에 `<a href="실제URL">🔗</a>` 누락 금지
+- 🛡️ **`auto_link_topics_in_html`**: LLM이 본문 링크를 빠뜨려도 레포명·도메인 키워드로 후처리 보정
+
 ### v2.9.16 - 병렬 LLM 상세 분석 (2026-08-29)
 - 🚀 **`ParallelAllRoomsDetailWorker`**: 채팅방 레인(1~4개, 기본 3) 병렬 상세 분석 — 레인은 LLM 호출+HTML 파일 저장만, DB 쓰기(방별 URL 동기화)는 코디네이터 단독 직렬 (NFS SQLite 동시 쓰기 차단)
 - 🤖 **다중 LLM 라운드로빈**: Ctrl+Shift+G에서 모델 복수 체크 → 채팅방에 순환 배정, `LLMProvider.max_concurrency`(기본 2) 세마포어로 동일 제공자 rate limit 방지
@@ -915,4 +921,4 @@ DB에 데이터가 있어도 파일이 없으면 재수집 대상이며, DB 저�
 
 ---
 
-*마지막 업데이트: 2026-08-29 | 버전: v2.9.16*
+*마지막 업데이트: 2026-08-30 | 버전: v2.9.17*

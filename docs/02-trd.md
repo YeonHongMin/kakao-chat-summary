@@ -223,7 +223,7 @@ sys.exit(app.exec())
 
 | 함수 | 설명 |
 |------|------|
-| `generate_detail_prompt` | 토픽 병합(약 20% 압축) + 본문 `<li>` 링크 필수 규칙이 포함된 프롬프트 생성 (v2.9.17) |
+| `generate_detail_prompt` | 같은 주제만 묶는 토픽 규칙 + 본문 `<li>` 링크 필수 규칙이 포함된 프롬프트 생성 (v2.9.17) |
 | `auto_link_topics_in_html` | URL 카드/원본 대화의 레포명·도메인 키워드로 본문 `<li>`에 누락된 🔗 보정 (v2.9.17) |
 | `call_detail_llm` | LLM 호출. 성공 시 `strip_reasoning` → `clean_foreign_chars` → `auto_link_topics_in_html` → 검증 |
 | `wrap_detail_html` | 다크 테마 HTML 래핑 |

@@ -3,6 +3,7 @@ import sys
 import re
 import logging
 import threading
+from collections import deque
 from pathlib import Path
 from datetime import datetime, timedelta, date
 from typing import Optional, List, Dict, Any
@@ -1720,6 +1721,10 @@ class MainWindow(QMainWindow):
         
         # 워커 참조 유지
         self.upload_worker: Optional[FileUploadWorker] = None
+        self._upload_queue: deque = deque()  # (file_path, room_name)
+        self._upload_results: List[tuple] = []  # (success, message, room_id)
+        self._upload_batch_total: int = 0
+        self._upload_current_room: str = ""
         self.all_rooms_url_worker: Optional[AllRoomsUrlSyncWorker] = None
         self.recovery_worker: Optional[RecoveryWorker] = None
         self.progress_dialog: Optional[SummaryProgressDialog] = None
@@ -3158,47 +3163,92 @@ class MainWindow(QMainWindow):
         file_path = dialog.file_path
         if not file_path:
             return
-        
-        # 프로그레스 표시
-        self._update_status("파일 업로드 중...", "working")
+
+        self._upload_queue.append((file_path, room.name))
+        self._upload_batch_total += 1
+
+        if self.upload_worker is not None and self.upload_worker.isRunning():
+            self._update_status(
+                f"[{room.name}] 업로드 대기열에 추가 ({len(self._upload_queue)}개 대기)",
+                "info",
+            )
+            return
+
         self.generate_btn.setEnabled(False)
-        
-        # 백그라운드 워커 시작
-        self.upload_worker = FileUploadWorker(file_path, room.name)
+        self._start_next_upload()
+
+    def _start_next_upload(self):
+        """대기열의 다음 파일을 업로드한다. 한 번에 하나만 실행 (SQLite 단일 쓰기)."""
+        file_path, room_name = self._upload_queue.popleft()
+        self._upload_current_room = room_name
+        self._update_status(f"{self._upload_prefix()} 파일 업로드 중...", "working")
+
+        self.upload_worker = FileUploadWorker(file_path, room_name)
         self.upload_worker.progress.connect(self._on_upload_progress)
         self.upload_worker.finished.connect(self._on_upload_finished)
         self.upload_worker.start()
+
+    def _upload_prefix(self) -> str:
+        done = len(self._upload_results) + 1
+        prefix = f"[{self._upload_current_room}]"
+        if self._upload_batch_total > 1:
+            prefix = f"[{done}/{self._upload_batch_total}] {prefix}"
+        return prefix
     
     @Slot(int, str)
     def _on_upload_progress(self, progress: int, message: str):
         """업로드 진행 상황."""
-        self._update_status(f"{message} ({progress}%)", "working")
+        self._update_status(f"{self._upload_prefix()} {message} ({progress}%)", "working")
     
     @Slot(bool, str, int)
     def _on_upload_finished(self, success: bool, message: str, room_id: int):
-        """업로드 완료."""
-        self.generate_btn.setEnabled(True)
-        
-        if success:
-            self._update_status("업로드 완료", "success")
-            QMessageBox.information(self, "업로드 완료", message)
+        """업로드 1건 완료. 대기열이 남아 있으면 다음 파일을 이어서 처리."""
+        # finished는 run() 안에서 emit되므로, 참조를 교체하기 전에 스레드 종료를 기다려야
+        # 실행 중인 QThread가 GC되어 Qt가 프로세스를 abort하는 일을 막을 수 있다.
+        if self.upload_worker is not None:
+            self.upload_worker.wait()
 
-            # v2.9.16: 전체 DB 재집계 대신 해당 방만 부분 갱신 (스크롤 위치 유지, 로딩 카드 없음)
-            self._invalidate_room_cache(room_id if room_id > 0 else None)
-            refreshed = False
-            if room_id > 0:
-                refreshed = self._refresh_room_in_cache(room_id)
-            if not refreshed:
+        self._upload_results.append((success, message, room_id))
+        if success and room_id > 0:
+            self._invalidate_room_cache(room_id)
+            if not self._refresh_room_in_cache(room_id):
                 self._load_rooms()
 
-            # 새로 추가된 채팅방 선택
-            if room_id > 0:
-                room = self.db.get_room_by_id(room_id)
-                if room:
-                    self._on_room_selected(room_id, room.file_path or "")
+        if self._upload_queue:
+            self._start_next_upload()
+            return
+
+        results = self._upload_results
+        self._upload_results = []
+        self._upload_batch_total = 0
+        self.upload_worker = None
+        self.generate_btn.setEnabled(True)
+
+        ok = [r for r in results if r[0]]
+        failed = [r for r in results if not r[0]]
+
+        if len(results) == 1:
+            if ok:
+                self._update_status("업로드 완료", "success")
+                QMessageBox.information(self, "업로드 완료", message)
+            else:
+                self._update_status("업로드 실패", "error")
+                QMessageBox.warning(self, "업로드 실패", message)
         else:
-            self._update_status("업로드 실패", "error")
-            QMessageBox.warning(self, "업로드 실패", message)
+            body = "\n\n".join(r[1] for r in results)
+            summary = f"성공 {len(ok)}개 / 실패 {len(failed)}개"
+            if failed:
+                self._update_status(f"업로드 완료 ({summary})", "warning")
+                QMessageBox.warning(self, "업로드 완료", f"{summary}\n\n{body}")
+            else:
+                self._update_status(f"업로드 완료 ({summary})", "success")
+                QMessageBox.information(self, "업로드 완료", f"{summary}\n\n{body}")
+
+        last_room_id = next((r[2] for r in reversed(ok) if r[2] > 0), -1)
+        if last_room_id > 0:
+            room = self.db.get_room_by_id(last_room_id)
+            if room:
+                self._on_room_selected(last_room_id, room.file_path or "")
     
     @Slot()
     def _update_status(self, message: str, status_type: str = "info"):
@@ -3667,6 +3717,7 @@ class MainWindow(QMainWindow):
             self._summary_in_progress
             or (self.backup_worker and self.backup_worker.isRunning())
             or (self.recovery_worker and self.recovery_worker.isRunning())
+            or (self.upload_worker and self.upload_worker.isRunning())
         )
         if is_busy:
             QMessageBox.warning(
@@ -5182,6 +5233,23 @@ class MainWindow(QMainWindow):
             active_worker.cancel()
             active_worker.wait(5000)
 
+        if self.upload_worker and self.upload_worker.isRunning():
+            pending = len(self._upload_queue)
+            pending_msg = f"\n대기 중인 {pending}개 파일은 취소됩니다." if pending else ""
+            reply = QMessageBox.question(
+                self, "종료 확인",
+                "파일 업로드가 진행 중입니다.\n"
+                f"현재 파일 처리가 끝나면 종료합니다.{pending_msg}\n종료하시겠습니까?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                event.ignore()
+                self._force_quit = False
+                return
+            self._upload_queue.clear()
+            self.upload_worker.wait()
+
         if self.room_list_worker and self.room_list_worker.isRunning():
             self.room_list_worker.wait(1000)
         
@@ -5194,7 +5262,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.9.18</p>
+            <p>버전 2.9.19</p>
             <p>카카오톡 대화를 분석하고 AI로 상세 분석하는 도구입니다.</p>
             <p>제작자: 민연홍<br>
             <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>

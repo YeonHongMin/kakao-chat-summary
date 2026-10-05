@@ -1,10 +1,22 @@
-# v2.9.17 / v2.9.16 / v2.9.15 변경 내역
+# v2.9.20 및 이전 버전 변경 내역
 
-> **앱 표시 버전**: `2.9.17` (`src/app.py`, About 다이얼로그)  
-> **작성일**: 2026-08-30  
-> v2.9.17 / v2.9.16 / v2.9.15 릴리스 상세 변경 내역입니다.
+> **앱 표시 버전**: `2.9.20` (`src/app.py`, About 다이얼로그)  
+> **작성일**: 2026-10-05  
+> 최신: v2.9.20 — 채팅방 전환 지연 개선 + 방 선택 크래시 수정.
 
 ---
+
+## 0. 채팅방 전환 지연 개선 + abort 크래시 수정 (v2.9.20)
+
+- **배경**: 방 클릭 시 UI가 수 초 멈춤. NFS 위 630MB/170만 건 DB의 집계 쿼리와 날짜 탭 파일 읽기가 전부 UI 스레드 동기 실행이었음. `QTimer.singleShot(10)` 지연은 같은 UI 스레드 재진입일 뿐 비동기가 아니었고, `setDate`의 `dateChanged` + 명시 호출로 같은 파일을 2회 읽는 버그도 있었음.
+- **`RoomStatsWorker`**: `get_room_stats`를 워커로 분리, 결과를 `_room_cache[room_id]["stats"]`에 실제 저장 (기존엔 `loaded` 플래그만 있어 캐시 무의미). 재방문 즉시 표시.
+- **`DateTabLoadWorker`**: 날짜 목록 glob + 원본 md + 상세 HTML 읽기를 워커로 이동. seq 가드로 stale 결과 폐기. `setDate` 시 `blockSignals`로 이중 로드 차단.
+- **DB 개선**: `get_room_stats` 집계 3쿼리 → 1쿼리 병합. `Base.metadata.create_all`을 프로세스·경로별 1회로 제한 (워커 `Database()` 생성 시 NFS DDL 반복 제거).
+- **🐛 방 선택 시 abort(0xc0000409) 수정**: 워커들이 커스텀 `finished` 시그널로 `QThread.finished`를 섀도잉하고 `run()` 안에서 emit — 연결된 `deleteLater`가 스레드 running 중(`finally`의 `engine.dispose()` 실행 중)에 C++ 객체 파괴 → Qt abort. 페이로드 시그널을 `done`으로 분리하고 `deleteLater`·정리는 네이티브 `finished`에 연결. 실행 중 워커는 `_bg_workers` set이 참조 유지, `RoomListLoadWorker`의 `terminate()` 제거(stale 결과는 identity 검사로 폐기).
+
+---
+
+## 이전 버전: v2.9.17 / v2.9.16 / v2.9.15
 
 ## 0. 토픽 병합·본문 링크 보정 (v2.9.17)
 

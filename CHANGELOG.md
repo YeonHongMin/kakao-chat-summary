@@ -3,6 +3,31 @@
 형식: [Semantic Versioning](https://semver.org/)에 가깝게 **주.부.패치**로 표기합니다.  
 이전 버전의 상세 히스토리는 `README.md`의 “변경 이력” 절과 `docs/06-tasks.md`를 참고하세요.
 
+## [2.9.20] — 2026-10-05
+
+### 채팅방 전환 지연 개선 (NFS 환경 UI 프리징 수정)
+
+- **증상**: 채팅방을 클릭해 옮길 때마다 UI가 수 초씩 멈춤
+- **원인**: 방 전환 경로의 무거운 I/O가 전부 UI 스레드에서 동기 실행됨. NFS 위 630MB / 170만 건 DB의 집계 쿼리(`get_room_stats` 3회 스캔)와 날짜 탭 파일 읽기(디렉터리 glob, 원본 md, 상세 HTML — 게다가 `dateChanged` 시그널 + 명시 호출로 2회 중복 실행)가 매 전환마다 네트워크 왕복을 유발
+- **수정 (`src/ui/main_window.py`)**:
+  - `RoomStatsWorker` 추가: 방 통계를 백그라운드 조회하고, 결과를 `_room_cache[room_id]["stats"]`에 실제로 저장 (기존에는 `loaded` 플래그만 저장해 캐시가 사실상 무의미했음). 재방문 시 즉시 표시
+  - `DateTabLoadWorker` 추가: 날짜 목록 glob + 원본/상세 파일 읽기를 워커로 이동. 방 전환·날짜 변경 모두 비동기, seq 가드로 stale 결과 폐기
+  - `_update_date_tab_for_room`의 이중 호출 제거 — `setDate` 시 `blockSignals`로 `dateChanged` 재진입 차단
+  - 방 이름 조회를 목록 캐시(`_room_name_for`)로 전환해 선택 경로의 DB 왕복 추가 제거
+  - 캐시 무효화 시 현재 방 통계를 백그라운드 재조회해 대시보드 최신 유지
+  - 🐛 **Qt abort (0xc0000409) 크래시 수정**: 워커들이 `finished`라는 이름으로 `QThread.finished`를 섀도잉한 커스텀 시그널을 `run()` 안에서 emit하고, 거기 `deleteLater`가 연결되어 있어 스레드가 아직 running 상태(finally의 `engine.dispose()` 실행 중)일 때 C++ 객체가 파괴 → 프로세스 abort. 페이로드 시그널을 `done`으로 분리하고 정리/파괴는 `run()` 완전 종료 후 발생하는 네이티브 `finished`에 연결
+  - `RoomListLoadWorker` 재시작 시 `terminate()` 제거 — NFS 블로킹 I/O는 강제 종료 불가, 참조 유지 + stale 검사로 대체. 실행 중 워커는 `_bg_workers` set에 보관해 종료 전 GC 방지
+- **수정 (`src/db/database.py`)**:
+  - `get_room_stats`: COUNT·COUNT DISTINCT·MIN/MAX를 단일 집계 쿼리로 병합 (인덱스 범위 스캔 3회 → 1회)
+  - `Base.metadata.create_all`을 프로세스·경로별 1회로 제한 — 워커용 `Database()` 생성 때마다 NFS 스키마 DDL이 반복되던 것 제거
+- **비고**: DB는 공유 디렉터리(NFS)에 유지 — 로컬 이동 없이 코드만으로 개선
+
+### 버전 표시
+
+- `app.py`, About 다이얼로그, `start_background.ps1` → `2.9.20`
+
+---
+
 ## [2.9.19] — 2026-10-03
 
 ### 파일 업로드 대기열 (크래시 수정)

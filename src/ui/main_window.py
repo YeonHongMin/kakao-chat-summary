@@ -1241,7 +1241,7 @@ class AllRoomsUrlSyncWorker(QThread):
 
 class UrlLoadWorker(QThread):
     """URL 탭 데이터 로드 워커 (DB + 파일 I/O를 UI 스레드 밖에서 수행)."""
-    finished = Signal(int, dict, dict, dict, str)  # room_id, urls_all, urls_recent, urls_weekly, source
+    done = Signal(int, dict, dict, dict, str)  # room_id, urls_all, urls_recent, urls_weekly, source
 
     def __init__(self, room_id: int, room_name: str):
         super().__init__()
@@ -1263,20 +1263,83 @@ class UrlLoadWorker(QThread):
                 urls_all = self.storage.load_url_list(self.room_name, "all")
                 source = "파일" if urls_all else ""
 
-            self.finished.emit(
+            self.done.emit(
                 self.room_id, urls_all, urls_recent, urls_weekly, source
             )
         except Exception as e:
             logger.warning(f"[URL 로드] {self.room_name} 실패: {e}")
-            self.finished.emit(self.room_id, {}, {}, {}, "")
+            self.done.emit(self.room_id, {}, {}, {}, "")
         finally:
             worker_db.engine.dispose()
+
+
+class RoomStatsWorker(QThread):
+    """채팅방 통계 백그라운드 조회 워커.
+
+    NFS 위 대용량 DB의 집계 쿼리가 수 초 걸릴 수 있으므로
+    방 전환 시 UI 스레드를 블로킹하지 않도록 분리한다.
+    """
+    done = Signal(int, int, dict)  # seq, room_id, stats
+
+    def __init__(self, seq: int, room_id: int):
+        super().__init__()
+        self.seq = seq
+        self.room_id = room_id
+
+    def run(self):
+        from db.database import Database
+        worker_db = Database()
+        try:
+            stats = worker_db.get_room_stats(self.room_id) or {}
+            self.done.emit(self.seq, self.room_id, stats)
+        except Exception as e:
+            logger.warning(f"[방 통계] room_id={self.room_id} 조회 실패: {e}")
+            self.done.emit(self.seq, self.room_id, {})
+        finally:
+            worker_db.engine.dispose()
+
+
+class DateTabLoadWorker(QThread):
+    """날짜 탭 데이터 로드 워커 (NFS 파일 I/O를 UI 스레드 밖에서 수행).
+
+    date_str=None → 날짜 목록을 glob하여 최신 날짜를 고른 뒤 콘텐츠 로드.
+    date_str 지정 → 해당 날짜 콘텐츠만 로드.
+    """
+    done = Signal(int, int, str, int, bool, object)
+    # seq, room_id, date_str, msg_count, has_detail, detail_html
+
+    def __init__(self, seq: int, room_id: int, room_name: str, date_str: Optional[str] = None):
+        super().__init__()
+        self.seq = seq
+        self.room_id = room_id
+        self.room_name = room_name
+        self.date_str = date_str
+        self.storage = get_storage()
+
+    def run(self):
+        date_str = self.date_str
+        try:
+            if not date_str:
+                available = self.storage.get_available_dates(self.room_name)
+                date_str = available[-1] if available else datetime.now().strftime("%Y-%m-%d")
+            msg_count = len(self.storage.load_daily_original(self.room_name, date_str))
+            has_detail = self.storage.has_detail_summary(self.room_name, date_str)
+            detail_html = (
+                self.storage.load_detail_summary(self.room_name, date_str)
+                if has_detail else None
+            )
+            self.done.emit(
+                self.seq, self.room_id, date_str, msg_count, has_detail, detail_html
+            )
+        except Exception as e:
+            logger.warning(f"[날짜 탭 로드] {self.room_name} {date_str} 실패: {e}")
+            self.done.emit(self.seq, self.room_id, date_str or "", 0, False, None)
 
 
 class RoomListLoadWorker(QThread):
     """채팅방 목록 및 메시지 수 비동기 로드 워커 (500MB+ DB 단계별 진행률 제공)."""
     progress = Signal(int, str)  # (percent, status_message)
-    finished = Signal(list, str)  # (rooms_with_counts, error_message)
+    done = Signal(list, str)  # (rooms_with_counts, error_message)
 
     def run(self):
         from db.database import Database
@@ -1293,7 +1356,7 @@ class RoomListLoadWorker(QThread):
 
                 if total_rooms == 0:
                     self.progress.emit(100, "완료")
-                    self.finished.emit([], "")
+                    self.done.emit([], "")
                     return
 
                 # 방 단위 개별 집계로 실제 진행률 보고 (v2.9.16: 가상 % 제거)
@@ -1321,10 +1384,10 @@ class RoomListLoadWorker(QThread):
                     )
 
                 self.progress.emit(100, "로딩 완료!")
-                self.finished.emit(rooms_with_counts, "")
+                self.done.emit(rooms_with_counts, "")
         except Exception as e:
             logger.exception("채팅방 목록 비동기 로드 실패")
-            self.finished.emit([], str(e))
+            self.done.emit([], str(e))
         finally:
             worker_db.engine.dispose()
 
@@ -1736,6 +1799,11 @@ class MainWindow(QMainWindow):
         self.all_rooms_detail_worker = None  # AllRoomsDetailWorker | ParallelAllRoomsDetailWorker
         self.url_load_worker: Optional[UrlLoadWorker] = None
         self._url_load_seq: int = 0
+        self.room_stats_worker: Optional[RoomStatsWorker] = None
+        self._room_stats_seq: int = 0
+        self.date_tab_worker: Optional[DateTabLoadWorker] = None
+        self._date_load_seq: int = 0
+        self._bg_workers: set = set()  # 실행 중 워커 참조 유지 (종료 전 GC → Qt abort 방지)
         self.backup_worker: Optional[BackupWorker] = None
         self.room_list_worker: Optional[RoomListLoadWorker] = None
         self._pending_delete_room: Optional[tuple] = None  # 백업 후 삭제 대기 (room_id, room_name)
@@ -2721,18 +2789,30 @@ class MainWindow(QMainWindow):
         self._update_status("채팅방 목록 로드 중...", "working")
         self._show_room_list_loading("채팅방 목록을 불러오는 중...", percent=0)
 
-        if self.room_list_worker is not None and self.room_list_worker.isRunning():
-            self.room_list_worker.terminate()
-            self.room_list_worker.wait(1000)
+        # 이전 목록 워커가 아직 실행 중이면 terminate()하지 않는다 —
+        # NFS 블로킹 I/O는 terminate로 못 끊고, 참조를 끊으면 실행 중
+        # QThread가 GC되어 Qt abort. 참조를 유지하고 결과는 stale 검사로 폐기.
+        old = self.room_list_worker
+        if old is not None and old.isRunning():
+            self._bg_workers.add(old)
+            old.finished.connect(lambda: self._bg_workers.discard(old))
+            old.finished.connect(old.deleteLater)
 
-        self.room_list_worker = RoomListLoadWorker()
-        self.room_list_worker.progress.connect(
+        worker = RoomListLoadWorker()
+        self.room_list_worker = worker
+        worker.progress.connect(
             lambda pct, msg: self._show_room_list_loading(msg, percent=pct)
         )
-        self.room_list_worker.finished.connect(self._on_rooms_loaded)
-        self.room_list_worker.start()
+        worker.done.connect(
+            lambda rooms, err, w=worker: self._on_rooms_loaded(w, rooms, err)
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
 
-    def _on_rooms_loaded(self, rooms_with_counts: List[tuple], error_message: str):
+    def _on_rooms_loaded(self, worker, rooms_with_counts: List[tuple], error_message: str):
+        # 이미 새 워커로 교체된 이전 워커의 결과는 폐기
+        if worker is not self.room_list_worker:
+            return
         """채팅방 목록 비동기 로드 완료 콜백."""
         if error_message:
             logger.error(f"채팅방 목록 로드 오류: {error_message}")
@@ -2867,6 +2947,18 @@ class MainWindow(QMainWindow):
             self._room_cache.clear()
         else:
             self._room_cache.pop(room_id, None)
+        # 현재 방 통계가 무효화되면 대시보드 갱신용으로 백그라운드 재조회
+        if self.current_room_id and (room_id is None or room_id == self.current_room_id):
+            self._room_stats_seq += 1
+            self._start_room_stats_load(self.current_room_id)
+
+    def _room_name_for(self, room_id: int) -> Optional[str]:
+        """채팅방 이름 조회 — 목록 캐시 우선 (DB 왕복 회피), 없으면 DB 조회."""
+        for r, _ in self._cached_rooms_with_counts:
+            if r.id == room_id:
+                return r.name
+        room = self.db.get_room_by_id(room_id)
+        return room.name if room else None
 
     def _highlight_selected_room(self, room_id: int):
         """채팅방 목록에서 선택된 방만 하이라이트."""
@@ -2892,73 +2984,47 @@ class MainWindow(QMainWindow):
 
         self.current_room_id = room_id
         self.current_room_file = file_path
+        self._room_stats_seq += 1
 
         if switching_room and url_tab_active:
             self._url_load_seq += 1
             self._update_status("URL 로드 중...", "working")
             self._show_url_loading_placeholder()
 
-        # 채팅방 통계 로드
-        stats = self.db.get_room_stats(room_id)
-        room_name = "채팅방"
-        
-        if stats:
-            room_name = stats.get('room_name', '채팅방')
-            self.header_label.setText(f"📊 {room_name}")
+        room_name = self._room_name_for(room_id) or "채팅방"
+        cached_stats = self._room_cache.get(room_id, {}).get("stats")
 
-            # 대화 기간 서브텍스트
-            first_date = stats.get('first_date')
-            last_date = stats.get('last_date')
-            if first_date and last_date:
-                days_span = (last_date - first_date).days + 1
-                msg_date_sub = f"{first_date} ~ {last_date} ({days_span}일)"
-            else:
-                msg_date_sub = "대화 없음"
-
-            # 대시보드 카드 업데이트
-            total_msg = stats.get('total_messages', 0)
-            self.card_messages.update_card(f"{total_msg:,}", msg_date_sub)
-            self.card_participants.update_card(
-                f"{stats.get('unique_senders', 0)}",
-                "명"
-            )
-
-            # 대시보드 요약 뷰어 (즉시 표시, I/O 없음)
-            date_range = ""
-            if stats.get('first_date') and stats.get('last_date'):
-                date_range = f"<p>📅 대화 기간: {stats['first_date']} ~ {stats['last_date']}</p>"
-
-            self.card_summaries.update_card("—", "날짜 탭 참조")
-            self.summary_browser.setHtml(f"""
-                <h3>📊 채팅방 정보</h3>
-                <p>💬 총 메시지: <b>{stats.get('total_messages', 0):,}개</b></p>
-                <p>👥 참여자: <b>{stats.get('unique_senders', 0)}명</b></p>
-                {date_range}
-                <hr>
-                <p style="color: #888;">날짜별 요약 탭에서 상세 분석을 확인하세요.</p>
-            """)
+        # 채팅방 통계: 캐시 히트 시 즉시 반영, 미스 시 워커로 비동기 집계
+        # (NFS 위 170만 건 테이블의 COUNT/DISTINCT/MIN/MAX는 수 초 소요)
+        if cached_stats is not None:
+            self._apply_room_stats(room_id, cached_stats)
+            room_name = cached_stats.get('room_name') or room_name
         else:
-            self.header_label.setText(f"📊 채팅방 #{room_id}")
+            self.header_label.setText(f"📊 {room_name}")
+            self.card_messages.update_card("…", "집계 중")
+            self.card_participants.update_card("…", "명")
+            self.card_summaries.update_card("—", "날짜 탭 참조")
             self.summary_browser.setHtml("""
-                <h3>🌟 요약</h3>
-                <p>채팅방 데이터가 없습니다.</p>
+                <h3>📊 채팅방 정보</h3>
+                <p style="color: #888;">통계를 불러오는 중...</p>
             """)
-        
+            self._start_room_stats_load(room_id)
+
         # 날짜 탭 및 URL 탭 지연 로딩 (Lazy Loading)
         self._current_url_data = {}
-        
+
         if hasattr(self, 'tab_widget'):
             current_tab = self.tab_widget.currentIndex()
-            
+
             # 날짜 탭 업데이트
             if current_tab == 1:
-                QTimer.singleShot(10, lambda: self._update_date_tab_for_room(room_name))
+                self._update_date_tab_for_room(room_name)
             else:
                 self._needs_date_update = True
-                
+
             # URL 탭 업데이트
             if current_tab == 2:
-                QTimer.singleShot(10, self._refresh_url_list)
+                self._refresh_url_list()
             else:
                 self._needs_url_update = True
         else:
@@ -2966,7 +3032,84 @@ class MainWindow(QMainWindow):
             self._refresh_url_list()
 
         # 캐시에 등록 — 다음 동일 방 클릭 시 스킵
-        self._room_cache[room_id] = {"loaded": True}
+        self._room_cache.setdefault(room_id, {})["loaded"] = True
+
+    def _launch_worker(self, worker: QThread, slot):
+        """워커 시작 + 실행 중 참조 유지.
+
+        `done`(페이로드 시그널)은 run() 안에서 emit되므로 수신 시점에
+        스레드가 아직 살아 있다 — 여기에 deleteLater를 걸면 스레드가
+        running 상태로 파괴되어 Qt가 abort한다. 정리/파괴는 run()이
+        완전히 끝난 뒤 발생하는 네이티브 `finished`에 연결한다.
+        """
+        self._bg_workers.add(worker)
+        worker.done.connect(slot)
+        worker.finished.connect(lambda: self._bg_workers.discard(worker))
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _start_room_stats_load(self, room_id: int):
+        """방 통계를 백그라운드 워커에서 조회."""
+        seq = self._room_stats_seq
+        worker = RoomStatsWorker(seq, room_id)
+        self.room_stats_worker = worker
+        self._launch_worker(worker, self._on_room_stats_loaded)
+
+    @Slot(int, int, dict)
+    def _on_room_stats_loaded(self, seq: int, room_id: int, stats: dict):
+        """방 통계 워커 완료 — 캐시에 저장하고, 여전히 현재 방이면 대시보드 반영."""
+        self._room_cache.setdefault(room_id, {})["stats"] = stats
+        if seq != self._room_stats_seq or room_id != self.current_room_id:
+            return
+        self._apply_room_stats(room_id, stats)
+
+    def _apply_room_stats(self, room_id: int, stats: Dict[str, Any]):
+        """조회된 통계를 대시보드 UI에 반영."""
+        if room_id != self.current_room_id:
+            return
+
+        if not stats:
+            self.header_label.setText(f"📊 채팅방 #{room_id}")
+            self.summary_browser.setHtml("""
+                <h3>🌟 요약</h3>
+                <p>채팅방 데이터가 없습니다.</p>
+            """)
+            return
+
+        room_name = stats.get('room_name', '채팅방')
+        self.header_label.setText(f"📊 {room_name}")
+
+        # 대화 기간 서브텍스트
+        first_date = stats.get('first_date')
+        last_date = stats.get('last_date')
+        if first_date and last_date:
+            days_span = (last_date - first_date).days + 1
+            msg_date_sub = f"{first_date} ~ {last_date} ({days_span}일)"
+        else:
+            msg_date_sub = "대화 없음"
+
+        # 대시보드 카드 업데이트
+        total_msg = stats.get('total_messages', 0)
+        self.card_messages.update_card(f"{total_msg:,}", msg_date_sub)
+        self.card_participants.update_card(
+            f"{stats.get('unique_senders', 0)}",
+            "명"
+        )
+
+        # 대시보드 요약 뷰어 (즉시 표시, I/O 없음)
+        date_range = ""
+        if first_date and last_date:
+            date_range = f"<p>📅 대화 기간: {first_date} ~ {last_date}</p>"
+
+        self.card_summaries.update_card("—", "날짜 탭 참조")
+        self.summary_browser.setHtml(f"""
+            <h3>📊 채팅방 정보</h3>
+            <p>💬 총 메시지: <b>{stats.get('total_messages', 0):,}개</b></p>
+            <p>👥 참여자: <b>{stats.get('unique_senders', 0)}명</b></p>
+            {date_range}
+            <hr>
+            <p style="color: #888;">날짜별 요약 탭에서 상세 분석을 확인하세요.</p>
+        """)
     
     @Slot(int)
     def _on_tab_changed(self, index: int):
@@ -2974,13 +3117,13 @@ class MainWindow(QMainWindow):
         if not self.current_room_id:
             return
             
-        room = self.db.get_room_by_id(self.current_room_id)
-        if not room:
+        room_name = self._room_name_for(self.current_room_id)
+        if not room_name:
             return
-            
+
         if index == 1 and getattr(self, '_needs_date_update', False):
             self._needs_date_update = False
-            QTimer.singleShot(10, lambda: self._update_date_tab_for_room(room.name))
+            self._update_date_tab_for_room(room_name)
             
         elif index == 2 and getattr(self, '_needs_url_update', False):
             self._needs_url_update = False
@@ -4165,27 +4308,52 @@ class MainWindow(QMainWindow):
         self._show_detail_date_content(date)
     
     def _update_date_tab_for_room(self, room_name: str):
-        """채팅방 선택 시 날짜 탭 정보 업데이트."""
-        from file_storage import get_storage
-        storage = get_storage()
-        
-        available_dates = storage.get_available_dates(room_name)
-        
-        if available_dates:
-            # 가장 최근 날짜로 설정
-            latest_date = available_dates[-1]
-            year, month, day = map(int, latest_date.split('-'))
-            self.date_edit.setDate(QDate(year, month, day))
-        else:
-            self.date_edit.setDate(QDate.currentDate())
-        
-        # 날짜 변경 이벤트 트리거
-        self._on_date_changed(self.date_edit.date())
-    
+        """채팅방 선택 시 날짜 탭 정보 업데이트 (비동기).
+
+        NFS 디렉터리 glob + 파일 읽기를 UI 스레드에서 제거하기 위해
+        DateTabLoadWorker가 날짜 목록과 최신 날짜 콘텐츠를 함께 로드한다.
+        """
+        if self.current_room_id is None:
+            return
+        self._date_load_seq += 1
+        self.date_info_label.setText("📅 날짜 목록 불러오는 중...")
+        self._start_date_tab_load(self._date_load_seq, self.current_room_id, room_name, None)
+
+    def _start_date_tab_load(
+        self, seq: int, room_id: int, room_name: str, date_str: Optional[str]
+    ):
+        """날짜 탭 데이터 로드 워커 시작."""
+        worker = DateTabLoadWorker(seq, room_id, room_name, date_str)
+        self.date_tab_worker = worker
+        self._launch_worker(worker, self._on_date_tab_loaded)
+
+    @Slot(int, int, str, int, bool, object)
+    def _on_date_tab_loaded(
+        self, seq: int, room_id: int, date_str: str,
+        msg_count: int, has_detail: bool, detail_html
+    ):
+        """날짜 탭 워커 완료 — 방 전환·이후 요청 결과는 무시."""
+        if seq != self._date_load_seq or room_id != self.current_room_id:
+            return
+        if not date_str:
+            date_str = QDate.currentDate().toString("yyyy-MM-dd")
+
+        # date_edit 동기화 (시그널 차단 — 콘텐츠는 이 콜백에서 직접 렌더)
+        try:
+            year, month, day = map(int, date_str.split('-'))
+            qd = QDate(year, month, day)
+        except ValueError:
+            qd = QDate.currentDate()
+        self.date_edit.blockSignals(True)
+        self.date_edit.setDate(qd)
+        self.date_edit.blockSignals(False)
+
+        self._render_detail_date_content(date_str, msg_count, has_detail, detail_html)
+
     # ===== 상세 분석 메서드 =====
 
     def _show_detail_date_content(self, date: QDate):
-        """날짜별 상세 분석 표시 (v2.9.0: 유일한 뷰)."""
+        """날짜별 상세 분석 표시 (비동기 — 파일 I/O는 워커에서 수행)."""
         if self.current_room_id is None:
             self.detail_browser.setHtml("""
                 <div style="text-align: center; padding: 50px; color: #888;">
@@ -4198,24 +4366,37 @@ class MainWindow(QMainWindow):
             self.detail_batch_btn.setVisible(False)
             return
 
-        room = self.db.get_room_by_id(self.current_room_id)
-        if not room:
+        room_name = self._room_name_for(self.current_room_id)
+        if not room_name:
             return
 
-        room_name = room.name
         date_str = date.toString("yyyy-MM-dd")
+        self._date_load_seq += 1
 
-        from file_storage import get_storage
-        storage = get_storage()
+        self.date_info_label.setText(f"📅 {date_str} | ⏳ 불러오는 중...")
+        self.detail_generate_btn.setVisible(False)
+        self.detail_open_btn.setVisible(False)
+        self.detail_browser.setHtml("""
+            <div style="text-align: center; padding: 50px; color: #888;">
+                <p style="font-size: 48px;">⏳</p>
+                <p style="font-size: 16px;">불러오는 중...</p>
+            </div>
+        """)
 
-        messages = storage.load_daily_original(room_name, date_str)
-        has_detail = storage.has_detail_summary(room_name, date_str)
-        has_original = len(messages) > 0
+        self._start_date_tab_load(
+            self._date_load_seq, self.current_room_id, room_name, date_str
+        )
+
+    def _render_detail_date_content(
+        self, date_str: str, msg_count: int, has_detail: bool, detail_html
+    ):
+        """날짜별 상세 분석 렌더링 (워커 결과를 UI에 반영)."""
+        has_original = msg_count > 0
 
         # 상태 라벨 업데이트
         status_parts = []
         if has_original:
-            status_parts.append(f"💬 {len(messages)}개 메시지")
+            status_parts.append(f"💬 {msg_count}개 메시지")
         status_parts.append("✅ 상세 분석 완료" if has_detail else "⚠️ 상세 분석 없음")
         self.date_info_label.setText(f"📅 {date_str} | " + " | ".join(status_parts))
 
@@ -4233,8 +4414,7 @@ class MainWindow(QMainWindow):
             """)
             return
 
-        if has_detail:
-            detail_html = storage.load_detail_summary(room_name, date_str)
+        if has_detail and detail_html:
             detail_html = self._sanitize_detail_html_for_qt(detail_html)
             # HTML 파일에서 body 콘텐츠만 추출하여 QTextBrowser에 표시
             body_match = re.search(
@@ -4924,21 +5104,16 @@ class MainWindow(QMainWindow):
         self._url_load_seq += 1
         load_seq = self._url_load_seq
 
-        if self.url_load_worker:
-            try:
-                self.url_load_worker.finished.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-
+        # 이전 워커는 seq 검사로 결과가 폐기되므로 disconnect 불필요.
+        # finished를 끊으면 _bg_workers 정리·deleteLater까지 끊겨 누수가 된다.
         worker = UrlLoadWorker(room_id, room_name)
         self.url_load_worker = worker
-        worker.finished.connect(
+        self._launch_worker(
+            worker,
             lambda rid, ua, ur, uw, src: self._on_url_load_finished(
                 load_seq, rid, ua, ur, uw, src
-            )
+            ),
         )
-        worker.finished.connect(worker.deleteLater)
-        worker.start()
     
     @Slot()
     def _refresh_url_list(self):
@@ -4953,14 +5128,14 @@ class MainWindow(QMainWindow):
             self.url_count_label.setText("0개 URL")
             self.url_status_label.setText("")
             return
-        
-        room = self.db.get_room_by_id(self.current_room_id)
-        if not room:
+
+        room_name = self._room_name_for(self.current_room_id)
+        if not room_name:
             return
 
         self._update_status("URL 로드 중...", "working")
         self._show_url_loading_placeholder()
-        self._start_url_load(self.current_room_id, room.name)
+        self._start_url_load(self.current_room_id, room_name)
 
     def _on_url_load_finished(
         self,
@@ -5252,7 +5427,12 @@ class MainWindow(QMainWindow):
 
         if self.room_list_worker and self.room_list_worker.isRunning():
             self.room_list_worker.wait(1000)
-        
+
+        # 실행 중인 조회 워커가 종료 전 GC/파괴되지 않도록 완료까지 대기
+        for w in list(self._bg_workers):
+            if w.isRunning():
+                w.wait(3000)
+
         event.accept()
         QApplication.quit()
 
@@ -5262,7 +5442,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.9.19</p>
+            <p>버전 2.9.20</p>
             <p>카카오톡 대화를 분석하고 AI로 상세 분석하는 도구입니다.</p>
             <p>제작자: 민연홍<br>
             <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>

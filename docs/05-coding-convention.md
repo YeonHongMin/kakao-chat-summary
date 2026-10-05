@@ -141,20 +141,36 @@ def _on_progress_update(self, progress: int, message: str):
     ...
 ```
 
-### 6.2 Worker 스레드 패턴
+### 6.2 Worker 스레드 패턴 (v2.9.20 — Qt abort 수정 반영)
+
+**⚠️ 규칙: 완료 페이로드 시그널은 반드시 `done`으로 명명한다. `finished`를 재정의하지 않는다.**
+
+`QThread.finished`를 커스텀 시그널로 섀도잉하고 `run()` 안에서 emit하면, 연결된 `deleteLater`가 **스레드가 아직 running 상태일 때**(예: `finally`의 `engine.dispose()` 실행 중) C++ 객체를 파괴 → Qt가 프로세스를 abort(`0xc0000409`)한다. 네이티브 `finished`는 `run()`이 완전히 끝난 뒤에만 발생하므로 파괴/정리는 여기에 연결한다.
+
 ```python
 class MyWorker(QThread):
     progress = Signal(int, str)
-    finished = Signal(bool, str)
+    done = Signal(bool, str)          # 페이로드 — run() 안에서 emit
     
     def run(self):
         try:
             for i in range(100):
                 self.progress.emit(i, f"처리 중... {i}%")
-            self.finished.emit(True, "완료")
+            self.done.emit(True, "완료")
         except Exception as e:
-            self.finished.emit(False, str(e))
+            self.done.emit(False, str(e))
+
+# 실행 측 (MainWindow)
+worker = MyWorker()
+self._bg_workers.add(worker)                  # 실행 중 참조 유지 (GC → abort 방지)
+worker.done.connect(self._on_done)            # 결과 수신
+worker.finished.connect(                      # 네이티브 finished = run() 종료 후
+    lambda: self._bg_workers.discard(worker))
+worker.finished.connect(worker.deleteLater)
+worker.start()
 ```
+
+**재시작 가능한 워커 규칙**: 새 워커를 시작할 때 이전 워커가 `isRunning()`이면 `terminate()`하지 말 것 — NFS 블로킹 I/O는 강제 종료가 안 되고, 참조를 끊으면 실행 중 GC → abort. `_bg_workers`에 보관하고 결과는 seq/identity 검사로 폐기한다 (`_launch_worker`, `_load_rooms` 참고).
 
 ---
 

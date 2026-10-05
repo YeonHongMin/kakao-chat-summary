@@ -98,6 +98,10 @@
 
 ## 4. 버전 히스토리
 
+### v2.9.20 (2026-10-05)
+- **채팅방 전환 지연 개선**: 방 통계(`RoomStatsWorker`)·날짜 탭 I/O(`DateTabLoadWorker`)를 백그라운드로 이동. `_room_cache`에 stats 실제 저장, `setDate` 이중 호출 제거, `get_room_stats` 단일 스캔 병합, `create_all` 경로별 1회
+- **방 선택 시 abort(0xc0000409) 수정**: 커스텀 `finished` 시그널이 `QThread.finished`를 섀도잉 → `run()` 중 emit + `deleteLater`로 running 중 파괴. `done`으로 분리, 정리는 네이티브 `finished`에 연결. `RoomListLoadWorker.terminate()` 제거, `_bg_workers` 참조 보관
+
 ### v2.9.19 (2026-10-03)
 - **파일 업로드 대기열**: 업로드 중 재업로드 시 실행 중 `QThread`가 GC되어 Qt가 abort하던 크래시 수정. 대기열로 한 번에 하나씩 순차 처리, 완료 후 요약 팝업 1회
 - `_busy_guard`·종료 확인에 업로드 포함

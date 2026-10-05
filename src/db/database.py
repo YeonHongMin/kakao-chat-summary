@@ -2,6 +2,7 @@
 import logging
 import os
 import sys
+import threading
 from pathlib import Path
 from datetime import datetime, date, time
 from typing import Optional, List, Dict, Any
@@ -14,6 +15,11 @@ from .models import Base, ChatRoom, Message, Summary, SyncLog, URL
 
 _logger = logging.getLogger("KakaoSummarizer")
 _env_loaded = False
+
+# create_all은 프로세스당 DB 경로별 1회만 수행 (워커마다 Database()를 새로 만들어도
+# NFS 상에서 스키마 조회·DDL이 반복되지 않도록 함)
+_schema_init_lock = threading.Lock()
+_schema_initialized_paths: set = set()
 
 
 def _load_env_local_once() -> None:
@@ -130,8 +136,11 @@ class Database:
 
         self.SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)
 
-        # 테이블 생성
-        Base.metadata.create_all(self.engine)
+        # 테이블 생성 (경로별 1회만 — 워커용 임시 Database() 생성마다 NFS DDL 반복 방지)
+        with _schema_init_lock:
+            if self.db_path not in _schema_initialized_paths:
+                Base.metadata.create_all(self.engine)
+                _schema_initialized_paths.add(self.db_path)
     
     @contextmanager
     def get_session(self):
@@ -509,25 +518,21 @@ class Database:
             if not room:
                 return {}
             
-            total_messages = session.query(func.count(Message.id)).filter(
-                Message.room_id == room_id
-            ).scalar()
-            
-            unique_senders = session.query(func.count(func.distinct(Message.sender))).filter(
-                Message.room_id == room_id
-            ).scalar()
-            
-            date_range = session.query(
+            # 집계 3개를 단일 쿼리로 병합 — NFS 위의 대용량 테이블에서
+            # 인덱스 범위 스캔을 3회 → 1회로 줄인다
+            row = session.query(
+                func.count(Message.id),
+                func.count(func.distinct(Message.sender)),
                 func.min(Message.message_date),
-                func.max(Message.message_date)
+                func.max(Message.message_date),
             ).filter(Message.room_id == room_id).first()
-            
+
             return {
                 'room_name': room.name,
-                'total_messages': total_messages,
-                'unique_senders': unique_senders,
-                'first_date': date_range[0] if date_range else None,
-                'last_date': date_range[1] if date_range else None,
+                'total_messages': row[0] if row else 0,
+                'unique_senders': row[1] if row else 0,
+                'first_date': row[2] if row else None,
+                'last_date': row[3] if row else None,
                 'last_sync': room.last_sync_at
             }
 

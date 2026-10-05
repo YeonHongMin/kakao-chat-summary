@@ -1,6 +1,6 @@
 # 02. Technical Requirements Document (TRD)
 
-## 1. 시스템 아키텍처 (v2.9.17)
+## 1. 시스템 아키텍처 (v2.9.20)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -59,7 +59,7 @@ sys.exit(app.exec())
 ### 2.2 ui/main_window.py
 **역할**: 메인 GUI 윈도우
 
-**주요 클래스** (v2.9.17 기준):
+**주요 클래스** (v2.9.20 기준):
 | 클래스 | 설명 |
 |--------|------|
 | `MainWindow` | 메인 윈도우 (탭, 메뉴, 상태바). 기동 시 `_load_rooms()` QTimer 지연 |
@@ -67,6 +67,8 @@ sys.exit(app.exec())
 | `FileUploadWorker` | 파일 업로드 백그라운드 처리 |
 | `RoomListLoadWorker` | 채팅방 목록 + 메시지 수 비동기 로드 (대용량 DB 프리징 방지, % 진행률, v2.9.14) |
 | `UrlLoadWorker` | URL 탭 DB·파일 로드 (UI 스레드 비블로킹, v2.9.10) |
+| `RoomStatsWorker` | 채팅방 통계 비동기 조회 — 방 전환 시 대용량 집계의 UI 블로킹 방지, `_room_cache` 저장 (v2.9.20) |
+| `DateTabLoadWorker` | 날짜 탭 데이터 비동기 로드 — 날짜 glob + 원본/상세 파일 읽기 (v2.9.20) |
 | `DetailSummaryWorker` | 단일 날짜 상세 분석 생성 (QThread, `cancel_event` 지원) |
 | `DetailBatchWorker` | 다중 날짜 상세 분석 일괄 생성 (QThread, `cancel_event` 지원) |
 | `AllRoomsDetailWorker` | 전체 채팅방 상세 분석 일괄 생성 (순차, 레거시 — QThread, `cancel_event` 지원, 요약 순서 정렬 v2.9.14) |
@@ -103,7 +105,7 @@ sys.exit(app.exec())
 | `get_all_rooms_with_message_counts()` | 채팅방 + 메시지 수 단일 쿼리 (기동 N+1 방지, v2.9.10) |
 | `get_room_by_id(room_id)` | 채팅방 조회 |
 | `get_room_by_name(name)` | 이름으로 채팅방 조회 |
-| `get_room_stats(room_id)` | 채팅방 통계 조회 |
+| `get_room_stats(room_id)` | 채팅방 통계 조회 (COUNT/DISTINCT/MIN/MAX 단일 집계 쿼리, v2.9.20) |
 | `delete_room(room_id)` | 채팅방 삭제 |
 | `add_messages(room_id, messages, batch_size=500)` | 메시지 일괄 추가 (중복 체크) |
 | `get_messages_by_room(room_id, start_date, end_date)` | 메시지 조회 |
@@ -118,6 +120,7 @@ sys.exit(app.exec())
 **SQLite 최적화**:
 - 저널 모드: 로컬 디스크 WAL / 네트워크(NFS·SMB) 경로 감지 시 DELETE (v2.9.13)
 - `synchronous=NORMAL` + `busy_timeout=30000` (NFS 락 대기 완화, v2.9.14)
+- `Base.metadata.create_all`은 프로세스·DB 경로별 1회만 실행 — 워커용 `Database()` 생성마다 NFS DDL 반복 방지 (v2.9.20)
 - `expire_on_commit=False` (세션 종료 후 ORM 객체 속성 접근 허용)
 - 배치 처리 (500개 단위)
 - 중복 메시지 체크

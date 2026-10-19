@@ -1336,6 +1336,38 @@ class DateTabLoadWorker(QThread):
             self.done.emit(self.seq, self.room_id, date_str or "", 0, False, None)
 
 
+class RoomRefreshWorker(QThread):
+    """방 1개의 정보·메시지 수 재조회 워커.
+
+    업로드/상세 분석 완료 후 전체 목록 재집계 없이 해당 방만 갱신할 때
+    NFS 위 COUNT 쿼리를 UI 스레드에서 실행하지 않도록 분리한다.
+    """
+    done = Signal(int, object, int)  # room_id, room(detached ChatRoom), count
+
+    def __init__(self, room_id: int):
+        super().__init__()
+        self.room_id = room_id
+
+    def run(self):
+        from db.database import Database
+        from db.models import ChatRoom
+        worker_db = Database()
+        try:
+            r = worker_db.get_room_by_id(self.room_id)
+            count = worker_db.get_message_count_by_room(self.room_id) if r else 0
+            room = (
+                ChatRoom(id=r.id, name=r.name, file_path=r.file_path,
+                         last_sync_at=r.last_sync_at, created_at=r.created_at)
+                if r else None
+            )
+            self.done.emit(self.room_id, room, int(count))
+        except Exception as e:
+            logger.warning(f"[방 갱신] room_id={self.room_id} 조회 실패: {e}")
+            self.done.emit(self.room_id, None, -1)
+        finally:
+            worker_db.engine.dispose()
+
+
 class RoomListLoadWorker(QThread):
     """채팅방 목록 및 메시지 수 비동기 로드 워커 (500MB+ DB 단계별 진행률 제공)."""
     progress = Signal(int, str)  # (percent, status_message)
@@ -2882,36 +2914,40 @@ class MainWindow(QMainWindow):
             )
 
     def _refresh_room_in_cache(self, room_id: int) -> bool:
-        """특정 채팅방 1개만 DB에서 재조회하여 메모리 캐시 갱신 (전체 재집계 회피, v2.9.16).
+        """특정 채팅방 1개만 재조회하여 메모리 캐시 갱신 (전체 재집계 회피).
 
         업로드/상세분석 완료 후 전체 500MB DB 집계를 다시 돌리지 않고,
-        해당 방의 메시지 수와 정보만 단일 쿼리로 갱신한다.
+        해당 방의 메시지 수와 정보만 갱신한다.
+        v2.9.21: NFS 위 COUNT 쿼리를 UI 스레드에서 동기 실행하던 것을
+        RoomRefreshWorker로 이동 (업로드 완료 시마다 UI 행 유발이었음).
 
         Returns:
-            True = 캐시 갱신 성공 (부분 갱신 완료), False = 캐시 없음 (전체 로드 필요)
+            True = 비동기 갱신 예약됨, False = 캐시 없음 (전체 로드 필요)
         """
         if not self._cached_rooms_with_counts:
             return False
+        self._launch_worker(RoomRefreshWorker(room_id), self._on_room_refreshed)
+        return True
 
-        room = self.db.get_room_by_id(room_id)
-        if not room:
-            return False
-        new_count = self.db.get_message_count_by_room(room_id)
+    @Slot(int, object, int)
+    def _on_room_refreshed(self, room_id: int, room, count: int):
+        """방 갱신 워커 완료 — 메모리 캐시에 반영하고 목록만 다시 그린다."""
+        if room is None or count < 0 or not self._cached_rooms_with_counts:
+            return
 
         found = False
         for i, (cached_room, _) in enumerate(self._cached_rooms_with_counts):
             if cached_room.id == room_id:
-                self._cached_rooms_with_counts[i] = (room, new_count)
+                self._cached_rooms_with_counts[i] = (room, count)
                 found = True
                 break
         if not found:
             # 새로 생성된 방 → 캐시에 추가
-            self._cached_rooms_with_counts.append((room, new_count))
+            self._cached_rooms_with_counts.append((room, count))
 
         self._render_room_list(preserve_scroll=True)
         if self.current_room_id:
             self._highlight_selected_room(self.current_room_id)
-        return True
 
     def _sort_rooms_with_counts(
         self, rooms_with_counts: List[tuple], sort_mode: str
@@ -3292,14 +3328,14 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "알림", "먼저 채팅방을 선택하세요.")
             return
         
-        # 현재 채팅방 이름 가져오기
-        room = self.db.get_room_by_id(self.current_room_id)
-        if not room:
+        # 현재 채팅방 이름 가져오기 (목록 캐시 우선 — 업로드 중 동기 DB 왕복 회피)
+        room_name = self._room_name_for(self.current_room_id)
+        if not room_name:
             QMessageBox.warning(self, "오류", "채팅방을 찾을 수 없습니다.")
             return
         
         # 파일 업로드 다이얼로그
-        dialog = UploadFileDialog(room.name, self)
+        dialog = UploadFileDialog(room_name, self)
         if dialog.exec() != QDialog.Accepted:
             return
         
@@ -3307,7 +3343,7 @@ class MainWindow(QMainWindow):
         if not file_path:
             return
 
-        self._upload_queue.append((file_path, room.name))
+        self._upload_queue.append((file_path, room_name))
         self._upload_batch_total += 1
 
         if self.upload_worker is not None and self.upload_worker.isRunning():
@@ -3373,26 +3409,52 @@ class MainWindow(QMainWindow):
         if len(results) == 1:
             if ok:
                 self._update_status("업로드 완료", "success")
-                QMessageBox.information(self, "업로드 완료", message)
+                self._popup("업로드 완료", message, QMessageBox.Information)
             else:
                 self._update_status("업로드 실패", "error")
-                QMessageBox.warning(self, "업로드 실패", message)
+                self._popup("업로드 실패", message, QMessageBox.Warning)
         else:
             body = "\n\n".join(r[1] for r in results)
             summary = f"성공 {len(ok)}개 / 실패 {len(failed)}개"
             if failed:
                 self._update_status(f"업로드 완료 ({summary})", "warning")
-                QMessageBox.warning(self, "업로드 완료", f"{summary}\n\n{body}")
+                self._popup("업로드 완료", f"{summary}\n\n{body}", QMessageBox.Warning)
             else:
                 self._update_status(f"업로드 완료 ({summary})", "success")
-                QMessageBox.information(self, "업로드 완료", f"{summary}\n\n{body}")
+                self._popup("업로드 완료", f"{summary}\n\n{body}", QMessageBox.Information)
 
+        # 업로드된 방을 '현재 보고 있는 방'일 때만 재선택해 화면을 갱신한다.
+        # 사용자가 이미 다른 방으로 이동했으면 선택을 뺏지 않는다 —
+        # 캐시는 위에서 무효화/백그라운드 갱신됐으므로 다시 볼 때 새 데이터가 뜬다.
         last_room_id = next((r[2] for r in reversed(ok) if r[2] > 0), -1)
-        if last_room_id > 0:
-            room = self.db.get_room_by_id(last_room_id)
-            if room:
-                self._on_room_selected(last_room_id, room.file_path or "")
+        if last_room_id > 0 and self.current_room_id == last_room_id:
+            file_path = next(
+                (r.file_path or "" for r, _ in self._cached_rooms_with_counts
+                 if r.id == last_room_id),
+                "",
+            )
+            self._on_room_selected(last_room_id, file_path)
     
+    def _popup(self, title: str, text: str, icon=QMessageBox.Information):
+        """소리 없는 메시지 팝업.
+
+        Windows에서 QMessageBox의 Information/Warning 아이콘은 시스템
+        알림음을 울린다. icon을 NoIcon으로 두고 pixmap만 표시해
+        알림음은 차단하고 아이콘 모양은 유지한다.
+        """
+        box = QMessageBox(QMessageBox.NoIcon, title, text, QMessageBox.Ok, self)
+        std_icon = {
+            QMessageBox.Information: QStyle.SP_MessageBoxInformation,
+            QMessageBox.Warning: QStyle.SP_MessageBoxWarning,
+            QMessageBox.Critical: QStyle.SP_MessageBoxCritical,
+            QMessageBox.Question: QStyle.SP_MessageBoxQuestion,
+        }.get(icon)
+        if std_icon is not None:
+            box.setIconPixmap(
+                self.style().standardIcon(std_icon).pixmap(48, 48)
+            )
+        box.exec()
+
     @Slot()
     def _update_status(self, message: str, status_type: str = "info"):
         """상태바 업데이트."""
@@ -5442,7 +5504,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.9.20</p>
+            <p>버전 2.9.21</p>
             <p>카카오톡 대화를 분석하고 AI로 상세 분석하는 도구입니다.</p>
             <p>제작자: 민연홍<br>
             <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>

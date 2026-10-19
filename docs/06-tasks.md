@@ -98,6 +98,11 @@
 
 ## 4. 버전 히스토리
 
+### v2.9.21 (2026-10-20)
+- **업로드 완료 행 수정**: `_refresh_room_in_cache`의 COUNT 쿼리를 `RoomRefreshWorker`로 이동 — 업로드마다 UI 멈춤 해소. 시작/완료 경로 `get_room_by_id`를 캐시 조회로 전환
+- **방 선택 강탈 수정**: 업로드 중 다른 방 이동 시 완료 후 이전 방으로 강제 복귀하던 것을 `current_room_id == last_room_id` 가드로 해소
+- **팝업 알림음 차단**: `_popup` 헬퍼(`NoIcon` + `setIconPixmap`)로 업로드 완료/실패 팝업의 Windows 시스템음 제거
+
 ### v2.9.20 (2026-10-05)
 - **채팅방 전환 지연 개선**: 방 통계(`RoomStatsWorker`)·날짜 탭 I/O(`DateTabLoadWorker`)를 백그라운드로 이동. `_room_cache`에 stats 실제 저장, `setDate` 이중 호출 제거, `get_room_stats` 단일 스캔 병합, `create_all` 경로별 1회
 - **방 선택 시 abort(0xc0000409) 수정**: 커스텀 `finished` 시그널이 `QThread.finished`를 섀도잉 → `run()` 중 emit + `deleteLater`로 running 중 파괴. `done`으로 분리, 정리는 네이티브 `finished`에 연결. `RoomListLoadWorker.terminate()` 제거, `_bg_workers` 참조 보관

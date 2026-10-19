@@ -1,6 +1,6 @@
 # 02. Technical Requirements Document (TRD)
 
-## 1. 시스템 아키텍처 (v2.9.20)
+## 1. 시스템 아키텍처 (v2.9.21)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -59,7 +59,7 @@ sys.exit(app.exec())
 ### 2.2 ui/main_window.py
 **역할**: 메인 GUI 윈도우
 
-**주요 클래스** (v2.9.20 기준):
+**주요 클래스** (v2.9.21 기준):
 | 클래스 | 설명 |
 |--------|------|
 | `MainWindow` | 메인 윈도우 (탭, 메뉴, 상태바). 기동 시 `_load_rooms()` QTimer 지연 |
@@ -69,6 +69,7 @@ sys.exit(app.exec())
 | `UrlLoadWorker` | URL 탭 DB·파일 로드 (UI 스레드 비블로킹, v2.9.10) |
 | `RoomStatsWorker` | 채팅방 통계 비동기 조회 — 방 전환 시 대용량 집계의 UI 블로킹 방지, `_room_cache` 저장 (v2.9.20) |
 | `DateTabLoadWorker` | 날짜 탭 데이터 비동기 로드 — 날짜 glob + 원본/상세 파일 읽기 (v2.9.20) |
+| `RoomRefreshWorker` | 단일 채팅방 재조회 — 업로드 완료 후 메시지 수·정보 백그라운드 갱신 (v2.9.21) |
 | `DetailSummaryWorker` | 단일 날짜 상세 분석 생성 (QThread, `cancel_event` 지원) |
 | `DetailBatchWorker` | 다중 날짜 상세 분석 일괄 생성 (QThread, `cancel_event` 지원) |
 | `AllRoomsDetailWorker` | 전체 채팅방 상세 분석 일괄 생성 (순차, 레거시 — QThread, `cancel_event` 지원, 요약 순서 정렬 v2.9.14) |

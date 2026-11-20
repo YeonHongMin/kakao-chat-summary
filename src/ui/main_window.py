@@ -107,7 +107,7 @@ class MessageParser:
 class FileUploadWorker(QThread):
     """파일 업로드 및 파싱 워커."""
     progress = Signal(int, str)  # (progress, message)
-    finished = Signal(bool, str, int)  # (success, message, room_id)
+    done = Signal(bool, str, int)  # (success, message, room_id) — QThread.finished 섀도잉 방지
     
     def __init__(self, file_path: str, room_name: Optional[str] = None):
         super().__init__()
@@ -117,6 +117,7 @@ class FileUploadWorker(QThread):
         # Note: DB는 __init__에서 가져오지 않고 run()에서 별도 인스턴스 생성 (스레드 안전)
     
     def run(self):
+        worker_db = None
         try:
             # 스레드 안전을 위해 워커 전용 DB 인스턴스 생성
             from db.database import Database
@@ -127,7 +128,7 @@ class FileUploadWorker(QThread):
             room_name = self.room_name or self._extract_room_name()
             
             # 2. 기존 채팅방 확인 또는 생성
-            self.progress.emit(20, "채팅방 생성 중...")
+            self.progress.emit(20, "채팅방 확인 중...")
             room = self._get_or_create_room(room_name, worker_db)
             
             # 3. 파일 파싱
@@ -135,7 +136,7 @@ class FileUploadWorker(QThread):
             parser = KakaoLogParser()
             parse_result = parser.parse(self.file_path)
             
-            # 4. 마지막 요약일 기준 cutoff 계산 (이전 날짜는 해시/DB 처리 건너뜀)
+            # 4. 마지막 요약일 기준 cutoff 계산 (이전 날짜는 파일/DB 처리 건너뜀)
             self.progress.emit(35, "기존 데이터 확인 중...")
             summarized_dates = sorted(self.storage.get_summarized_dates(room_name))
             if summarized_dates:
@@ -145,65 +146,51 @@ class FileUploadWorker(QThread):
             else:
                 cutoff_str = None  # 요약 없으면 모든 날짜 처리
 
-            # cutoff 이후 날짜만 해시/개수 계산
             recent_dates = [
-                d for d in parse_result.messages_by_date.keys()
+                d for d in sorted(parse_result.messages_by_date.keys())
                 if cutoff_str is None or d >= cutoff_str
             ]
             skipped_dates = len(parse_result.messages_by_date) - len(recent_dates)
 
-            old_content_hashes = {}
-            old_message_counts = {}
-            for date_str in recent_dates:
-                old_content_hashes[date_str] = self.storage.get_original_content_hash(room_name, date_str)
-                old_message_counts[date_str] = len(self.storage.load_daily_original(room_name, date_str))
-
-            # 5. 일별 파일 저장 (original) - cutoff 이후만 저장, 과거는 보호
-            self.progress.emit(40, "일별 파일 저장 중...")
-            saved_files = self.storage.save_all_daily_originals(
+            # 5. 일별 파일 저장 (original) - 날짜당 1회 읽기 + 변경 시에만 쓰기
+            self.progress.emit(45, f"일별 파일 저장 중... ({len(recent_dates)}일)")
+            saved_files, diff_stats = self.storage.save_all_daily_originals_with_stats(
                 room_name,
                 parse_result.messages_by_date,
                 cutoff_date=cutoff_str
             )
 
-            # 6. 최근 날짜만 요약 무효화 체크 (임계값: 10개)
-            self.progress.emit(50, "요약 상태 확인 중...")
+            # 6. 최근 날짜만 요약 무효화 체크 (메모리 해시/개수 재사용, 추가 디스크 읽기 없음)
+            self.progress.emit(55, "요약 상태 확인 중...")
             invalidated_dates = []
             for date_str in recent_dates:
-                old_hash = old_content_hashes.get(date_str, "")
-                new_hash = self.storage.get_original_content_hash(room_name, date_str)
-                old_count = old_message_counts.get(date_str, 0)
-                new_count = len(self.storage.load_daily_original(room_name, date_str))
-
+                old_hash, new_hash, old_count, new_count = diff_stats.get(
+                    date_str, ("", "", 0, 0)
+                )
                 if self.storage.invalidate_summary_if_content_changed(
                     room_name, date_str, old_hash, new_hash,
                     old_count, new_count
                 ):
                     invalidated_dates.append(date_str)
 
-            # 7. 최근 날짜만 DB 저장 (과거 날짜는 파일만 저장됨)
-            self.progress.emit(60, f"DB에 저장 중... ({len(recent_dates)}일, {skipped_dates}일 건너뜀)")
-            total_messages = 0
-            new_messages = 0
-
+            # 7. 최근 날짜 메시지 통합 파싱 → DB 단일 트랜잭션 일괄 반영 (N+1 SELECT 제거)
+            self.progress.emit(65, f"DB에 일괄 저장 중... ({len(recent_dates)}일, {skipped_dates}일 보호)")
+            all_recent_messages: List[Dict[str, Any]] = []
             for date_str in recent_dates:
                 lines = parse_result.messages_by_date[date_str]
                 msg_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-                messages = []
-
                 for line in lines:
                     parsed = MessageParser.parse_message(line, msg_date)
                     if parsed:
-                        messages.append(parsed)
+                        all_recent_messages.append(parsed)
 
-                if messages:
-                    total_messages += len(messages)
-                    try:
-                        new_count = worker_db.add_messages(room.id, messages)
-                        new_messages += new_count
-                    except Exception:
-                        # DB 오류 시 파일은 이미 저장됨
-                        pass
+            total_messages = len(all_recent_messages)
+            new_messages = 0
+            if all_recent_messages:
+                try:
+                    new_messages = worker_db.add_messages(room.id, all_recent_messages)
+                except Exception as db_err:
+                    logger.warning(f"[업로드] {room_name} DB 일괄 저장 오류 (원본 파일은 저장됨): {db_err}")
             
             # 8. 동기화 시간 업데이트
             self.progress.emit(90, "마무리 중...")
@@ -216,20 +203,21 @@ class FileUploadWorker(QThread):
                 )
             except Exception:
                 pass  # DB 오류 무시
-            finally:
-                worker_db.engine.dispose()  # 연결 해제
             
             self.progress.emit(100, "완료!")
             
             # 결과 메시지 구성
-            result_msg = f"✅ {room_name}\n📁 {len(saved_files)}일 저장됨 ({skipped_dates}일 보호)\n💬 최근 {total_messages:,}개 메시지 DB 반영"
+            result_msg = f"✅ {room_name}\n📁 {len(saved_files)}일 저장됨 ({skipped_dates}일 보호)\n💬 최근 {total_messages:,}개 메시지 중 {new_messages:,}개 신규 DB 반영"
             if invalidated_dates:
                 result_msg += f"\n🔄 {len(invalidated_dates)}일 요약 갱신 필요"
             
-            self.finished.emit(True, result_msg, room.id if room else -1)
+            self.done.emit(True, result_msg, room.id if room else -1)
             
         except Exception as e:
-            self.finished.emit(False, f"❌ 오류: {str(e)}", -1)
+            self.done.emit(False, f"❌ 오류: {str(e)}", -1)
+        finally:
+            if worker_db is not None:
+                worker_db.engine.dispose()
     
     def _extract_room_name(self) -> str:
         """파일명에서 채팅방 이름 추출."""
@@ -536,7 +524,7 @@ class SummaryProgressWidget(QWidget):
 
     def __init__(self, parent=None, llm_name: str = "LLM", room_name: str = "",
                  icon: str = "🤖", initial_message: Optional[str] = None,
-                 cancel_tooltip: str = "취소"):
+                 cancel_tooltip: str = "취소", show_cancel: bool = True):
         super().__init__(parent)
         self.room_name = room_name
         layout = QHBoxLayout(self)
@@ -567,6 +555,7 @@ class SummaryProgressWidget(QWidget):
         self.cancel_btn.setFixedSize(24, 24)
         self.cancel_btn.setObjectName("summaryProgressCancelBtn")
         self.cancel_btn.clicked.connect(self._on_cancel)
+        self.cancel_btn.setVisible(show_cancel)
         layout.addWidget(self.cancel_btn)
 
         self.setObjectName("summaryProgressWidget")
@@ -581,7 +570,10 @@ class SummaryProgressWidget(QWidget):
     def update_progress(self, progress: int, message: str):
         """진행 상황 업데이트."""
         self.progress_bar.setValue(progress)
-        self.message_label.setText(f"[{self.room_name}] {message}")
+        if self.room_name:
+            self.message_label.setText(f"[{self.room_name}] {message}")
+        else:
+            self.message_label.setText(message)
 
     def set_completed(self, success: bool, message: str):
         """완료 상태 표시."""
@@ -1803,8 +1795,10 @@ class SettingsDialog(QDialog):
 class MainWindow(QMainWindow):
     """메인 윈도우."""
     
-    def __init__(self):
+    def __init__(self, env_created: bool = False, env_copy_error: Optional[str] = None):
         super().__init__()
+        self._env_created = env_created
+        self._env_copy_error = env_copy_error
         self.setWindowTitle("🗨️ 카카오톡 대화 분석기")
         self.setMinimumSize(1000, 700)
         self.setStyleSheet(MAIN_STYLESHEET)
@@ -1861,6 +1855,104 @@ class MainWindow(QMainWindow):
         self._setup_tray_icon()
         self._show_room_list_loading("채팅방 목록 로드 중...")
         QTimer.singleShot(0, self._load_rooms)
+        QTimer.singleShot(400, self._check_initial_env_setup)
+
+    def _check_initial_env_setup(self):
+        """기동 시 .env.local 누락 또는 API 키 미설정이면 설정 안내 알림을 표시한다."""
+        from full_config import config as _cfg
+
+        env_local = _cfg.base_dir / ".env.local"
+        has_env_file = env_local.exists()
+        has_api_key = _cfg.has_any_api_key()
+
+        needs_notice = (
+            bool(self._env_copy_error)
+            or not has_env_file
+            or self._env_created
+            or (_cfg.current_provider != "ollama" and not has_api_key)
+        )
+        if not needs_notice:
+            return
+
+        if self._env_copy_error:
+            reason = (
+                f"• .env.local 파일 자동 생성에 실패했습니다.\n"
+                f"  ({self._env_copy_error})"
+            )
+        elif not has_env_file:
+            reason = "• 프로젝트 폴더에 .env.local 설정 파일이 없습니다."
+        elif self._env_created:
+            reason = (
+                "• .env.local 파일이 없어 env.local.example에서 자동 생성했습니다.\n"
+                "• 아직 실제 LLM API 키가 입력되지 않았습니다."
+            )
+        else:
+            reason = "• .env.local에 유효한 LLM API 키가 설정되어 있지 않습니다."
+
+        msg = (
+            "LLM API 초기 설정이 필요합니다.\n\n"
+            f"{reason}\n\n"
+            "앱은 정상 기동되었으며 채팅방 조회·업로드는 바로 사용할 수 있습니다.\n"
+            "AI 상세 분석을 사용하려면 [지금 설정하기]를 눌러 LLM 제공자와 API 키를 입력해 주세요.\n"
+            "(저장 시 .env.local 파일이 자동으로 생성·갱신됩니다.)"
+        )
+
+        box = QMessageBox(
+            QMessageBox.NoIcon,
+            "⚙️ 초기 설정 안내 (.env.local)",
+            msg,
+            QMessageBox.NoButton,
+            self,
+        )
+        box.setIconPixmap(
+            self.style().standardIcon(QStyle.SP_MessageBoxWarning).pixmap(48, 48)
+        )
+        open_settings_btn = box.addButton("⚙️ 지금 설정하기", QMessageBox.AcceptRole)
+        box.addButton("나중에", QMessageBox.RejectRole)
+        box.setDefaultButton(open_settings_btn)
+        box.exec()
+
+        if box.clickedButton() == open_settings_btn:
+            self._on_settings()
+        else:
+            self._update_status("⚠️ API 키 미설정 — 도구 → 설정에서 입력하세요", "warning")
+
+    def _ensure_api_key_or_prompt_settings(self, providers: List[str]) -> bool:
+        """선택한 LLM 제공자의 API 키가 있는지 확인하고, 없으면 설정 창 열기를 제안한다."""
+        from full_config import config as _cfg, LLM_PROVIDERS
+
+        missing = [p for p in providers if not _cfg.get_api_key(p)]
+        if not missing:
+            return True
+
+        names = ", ".join(
+            f"{LLM_PROVIDERS[p].name} ({LLM_PROVIDERS[p].env_key})"
+            if p in LLM_PROVIDERS else p
+            for p in missing
+        )
+        box = QMessageBox(
+            QMessageBox.NoIcon,
+            "⚙️ API 키 설정 필요",
+            f"선택한 LLM의 API 키가 설정되어 있지 않습니다:\n"
+            f"• {names}\n\n"
+            "지금 설정 창을 열어 API 키를 입력하시겠습니까?\n"
+            "(입력 후 확인을 누르면 .env.local에 자동 저장됩니다.)",
+            QMessageBox.NoButton,
+            self,
+        )
+        box.setIconPixmap(
+            self.style().standardIcon(QStyle.SP_MessageBoxWarning).pixmap(48, 48)
+        )
+        open_btn = box.addButton("⚙️ 설정 열기", QMessageBox.AcceptRole)
+        box.addButton("취소", QMessageBox.RejectRole)
+        box.setDefaultButton(open_btn)
+        box.exec()
+
+        if box.clickedButton() == open_btn:
+            self._on_settings()
+            # 설정 후 다시 확인해서 입력되었으면 바로 진행 허용
+            return all(bool(_cfg.get_api_key(p)) for p in providers)
+        return False
     
     def _setup_ui(self):
         """UI 구성."""
@@ -3348,7 +3440,7 @@ class MainWindow(QMainWindow):
 
         if self.upload_worker is not None and self.upload_worker.isRunning():
             self._update_status(
-                f"[{room.name}] 업로드 대기열에 추가 ({len(self._upload_queue)}개 대기)",
+                f"[{room_name}] 업로드 대기열에 추가 ({len(self._upload_queue)}개 대기)",
                 "info",
             )
             return
@@ -3360,11 +3452,21 @@ class MainWindow(QMainWindow):
         """대기열의 다음 파일을 업로드한다. 한 번에 하나만 실행 (SQLite 단일 쓰기)."""
         file_path, room_name = self._upload_queue.popleft()
         self._upload_current_room = room_name
-        self._update_status(f"{self._upload_prefix()} 파일 업로드 중...", "working")
+        status_msg = f"{self._upload_prefix()} 파일 업로드 중..."
+        self._update_status(status_msg, "working")
+        if not self._summary_in_progress:
+            self._show_status_progress(
+                room_name="",
+                llm_name="업로드",
+                initial_message=status_msg,
+                icon="📤",
+                show_cancel=False,
+            )
 
         self.upload_worker = FileUploadWorker(file_path, room_name)
         self.upload_worker.progress.connect(self._on_upload_progress)
-        self.upload_worker.finished.connect(self._on_upload_finished)
+        self.upload_worker.done.connect(self._on_upload_finished)
+        self.upload_worker.finished.connect(self.upload_worker.deleteLater)
         self.upload_worker.start()
 
     def _upload_prefix(self) -> str:
@@ -3377,12 +3479,15 @@ class MainWindow(QMainWindow):
     @Slot(int, str)
     def _on_upload_progress(self, progress: int, message: str):
         """업로드 진행 상황."""
-        self._update_status(f"{self._upload_prefix()} {message} ({progress}%)", "working")
+        text = f"{self._upload_prefix()} {message}"
+        self._update_status(f"{text} ({progress}%)", "working")
+        if not self._summary_in_progress and self.summary_progress_widget is not None:
+            self.summary_progress_widget.update_progress(progress, text)
     
     @Slot(bool, str, int)
     def _on_upload_finished(self, success: bool, message: str, room_id: int):
         """업로드 1건 완료. 대기열이 남아 있으면 다음 파일을 이어서 처리."""
-        # finished는 run() 안에서 emit되므로, 참조를 교체하기 전에 스레드 종료를 기다려야
+        # done은 run() 안에서 emit되므로, 참조를 교체하기 전에 스레드 종료를 기다려야
         # 실행 중인 QThread가 GC되어 Qt가 프로세스를 abort하는 일을 막을 수 있다.
         if self.upload_worker is not None:
             self.upload_worker.wait()
@@ -3402,6 +3507,8 @@ class MainWindow(QMainWindow):
         self._upload_batch_total = 0
         self.upload_worker = None
         self.generate_btn.setEnabled(True)
+        if not self._summary_in_progress:
+            self._hide_status_progress()
 
         ok = [r for r in results if r[0]]
         failed = [r for r in results if not r[0]]
@@ -3503,19 +3610,9 @@ class MainWindow(QMainWindow):
         self.generate_btn.setEnabled(False)
 
         # 상태바 프로그레스
-        self.summary_progress_widget = SummaryProgressWidget(
-            self, llm_name="URL", room_name="전체 채팅방"
+        self._show_status_progress(
+            room_name="전체 채팅방", llm_name="URL", icon="🔗"
         )
-        self.summary_progress_widget.setMinimumHeight(28)
-        self.summary_progress_widget.setMaximumHeight(28)
-
-        # 기존 상태바 컨테이너 임시 제거
-        if hasattr(self, '_statusbar_container'):
-            self.statusbar.removeWidget(self._statusbar_container)
-
-        # 프로그레스 위젯을 상태바에 직접 추가
-        self.statusbar.addWidget(self.summary_progress_widget, 1)
-        self.summary_progress_widget.show()
 
         self._update_status("⏳ 전체 채팅방 URL 동기화 중...", "working")
 
@@ -3540,14 +3637,7 @@ class MainWindow(QMainWindow):
         self.generate_btn.setEnabled(True)
         self._summary_in_progress = False
 
-        if self.summary_progress_widget:
-            self.statusbar.removeWidget(self.summary_progress_widget)
-            self.summary_progress_widget.deleteLater()
-            self.summary_progress_widget = None
-
-        # 기존 상태바 컨테이너 복원
-        if hasattr(self, '_statusbar_container'):
-            self.statusbar.addWidget(self._statusbar_container, 1)
+        self._hide_status_progress()
 
         if success:
             self._update_status("전체 채팅방 URL 동기화 완료", "success")
@@ -3751,6 +3841,8 @@ class MainWindow(QMainWindow):
                 selected_llms.append(item.data(Qt.UserRole))
         if not selected_llms:
             selected_llms = [selected_llm]
+        if not self._ensure_api_key_or_prompt_settings(selected_llms):
+            return
         max_lanes = lane_spin.value()
 
         llm_display_name = " + ".join(
@@ -3765,11 +3857,9 @@ class MainWindow(QMainWindow):
         self._summary_in_progress = True
         self.generate_btn.setEnabled(False)
 
-        self.summary_progress_widget = SummaryProgressWidget(
-            self, llm_name=llm_display_name, room_name="전체 채팅방 상세 분석"
+        self._show_status_progress(
+            room_name="전체 채팅방 상세 분석", llm_name=llm_display_name, icon="🤖"
         )
-        self.statusbar.insertPermanentWidget(0, self.summary_progress_widget)
-        self.summary_progress_widget.show()
 
         self._update_status(f"🔍 전체 채팅방 상세 분석 중... ({max_lanes}레인)", "working")
 
@@ -3797,10 +3887,7 @@ class MainWindow(QMainWindow):
         self._summary_in_progress = False
         self.generate_btn.setEnabled(True)
 
-        if self.summary_progress_widget:
-            self.statusbar.removeWidget(self.summary_progress_widget)
-            self.summary_progress_widget.deleteLater()
-            self.summary_progress_widget = None
+        self._hide_status_progress()
 
         if success:
             self._update_status("✅ 전체 채팅방 상세 분석 완료", "success")
@@ -3933,14 +4020,19 @@ class MainWindow(QMainWindow):
         return False
 
     def _show_status_progress(
-        self, room_name: str, llm_name: str, initial_message: str,
-        icon: str = "💾", cancel_tooltip: str = "취소",
+        self, room_name: str, llm_name: str, initial_message: Optional[str] = None,
+        icon: str = "💾", cancel_tooltip: str = "취소", show_cancel: bool = True,
     ) -> SummaryProgressWidget:
         """상태바에 프로그레스 위젯을 표시하고 기존 상태 영역을 숨긴다."""
+        if self.summary_progress_widget is not None:
+            self.statusbar.removeWidget(self.summary_progress_widget)
+            self.summary_progress_widget.deleteLater()
+            self.summary_progress_widget = None
+
         widget = SummaryProgressWidget(
             self, llm_name=llm_name, room_name=room_name,
             icon=icon, initial_message=initial_message,
-            cancel_tooltip=cancel_tooltip,
+            cancel_tooltip=cancel_tooltip, show_cancel=show_cancel,
         )
         widget.setMinimumHeight(28)
         widget.setMaximumHeight(28)
@@ -3952,13 +4044,18 @@ class MainWindow(QMainWindow):
         return widget
 
     def _hide_status_progress(self):
-        """상태바 프로그레스 위젯을 제거하고 기본 상태 영역을 복원한다."""
+        """상태바 프로그레스 위젯을 제거하고 기본 상태 영역을 복원한다.
+
+        Qt의 QStatusBar.removeWidget()은 내부적으로 위젯을 hide()하므로
+        addWidget() 직후 반드시 show()를 호출해야 하단 상태바가 다시 보인다.
+        """
         if self.summary_progress_widget:
             self.statusbar.removeWidget(self.summary_progress_widget)
             self.summary_progress_widget.deleteLater()
             self.summary_progress_widget = None
         if hasattr(self, "_statusbar_container"):
             self.statusbar.addWidget(self._statusbar_container, 1)
+            self._statusbar_container.show()
 
     @Slot()
     def _on_backup(self):
@@ -4659,8 +4756,7 @@ class MainWindow(QMainWindow):
             return
 
         selected_llm = llm_combo.currentData()
-        if not config.get_api_key(selected_llm):
-            QMessageBox.warning(self, "API 키 필요", f"선택한 LLM의 API 키가 설정되어 있지 않습니다.")
+        if not self._ensure_api_key_or_prompt_settings([selected_llm]):
             return
 
         # 날짜 범위 결정
@@ -4702,11 +4798,9 @@ class MainWindow(QMainWindow):
         self.summary_source_room_id = self.current_room_id
         self.generate_btn.setEnabled(False)
 
-        self.summary_progress_widget = SummaryProgressWidget(
-            self, llm_name=llm_display, room_name=room_name
+        self._show_status_progress(
+            room_name=room_name, llm_name=llm_display, icon="🤖"
         )
-        self.statusbar.insertPermanentWidget(0, self.summary_progress_widget)
-        self.summary_progress_widget.show()
         self._update_status(f"🔍 {llm_display} 상세 분석 중... ({len(target_dates)}일)", "working")
 
         self.detail_batch_worker = DetailBatchWorker(
@@ -4781,6 +4875,8 @@ class MainWindow(QMainWindow):
             return
 
         selected_llm = llm_keys[llm_combo.currentIndex()]
+        if not self._ensure_api_key_or_prompt_settings([selected_llm]):
+            return
         llm_display_name = llm_combo.currentText()
 
         # 상태 플래그 설정
@@ -4788,11 +4884,9 @@ class MainWindow(QMainWindow):
         self.detail_generate_btn.setEnabled(False)
 
         # 상태바에 프로그레스 위젯 삽입
-        self.summary_progress_widget = SummaryProgressWidget(
-            self, llm_name=llm_display_name, room_name=f"{room_name} 상세 분석"
+        self._show_status_progress(
+            room_name=f"{room_name} 상세 분석", llm_name=llm_display_name, icon="🤖"
         )
-        self.statusbar.insertPermanentWidget(0, self.summary_progress_widget)
-        self.summary_progress_widget.show()
 
         self._update_status(f"⏳ {llm_display_name} 상세 분석 중...", "working")
 
@@ -4813,10 +4907,7 @@ class MainWindow(QMainWindow):
         self.detail_generate_btn.setEnabled(True)
 
         # 프로그레스 위젯 제거
-        if self.summary_progress_widget:
-            self.statusbar.removeWidget(self.summary_progress_widget)
-            self.summary_progress_widget.deleteLater()
-            self.summary_progress_widget = None
+        self._hide_status_progress()
 
         if success:
             self._update_status("✅ 상세 분석 완료", "success")
@@ -4928,6 +5019,8 @@ class MainWindow(QMainWindow):
             return
 
         selected_llm = llm_keys[llm_combo.currentIndex()]
+        if not self._ensure_api_key_or_prompt_settings([selected_llm]):
+            return
         self._start_detail_batch(self.current_room_id, room_name, selected_llm)
 
     def _start_detail_batch(self, room_id: int, room_name: str, llm_provider: str):
@@ -4955,11 +5048,9 @@ class MainWindow(QMainWindow):
         self.generate_btn.setEnabled(False)
 
         # 프로그레스 위젯
-        self.summary_progress_widget = SummaryProgressWidget(
-            self, llm_name=llm_display, room_name=f"{room_name} 상세 분석"
+        self._show_status_progress(
+            room_name=f"{room_name} 상세 분석", llm_name=llm_display, icon="🤖"
         )
-        self.statusbar.insertPermanentWidget(0, self.summary_progress_widget)
-        self.summary_progress_widget.show()
 
         self._update_status(
             f"🔍 상세 분석 시작 ({len(dates_needing_detail)}일)...", "working"
@@ -4986,10 +5077,7 @@ class MainWindow(QMainWindow):
         self._summary_in_progress = False
         self.generate_btn.setEnabled(True)
 
-        if self.summary_progress_widget:
-            self.statusbar.removeWidget(self.summary_progress_widget)
-            self.summary_progress_widget.deleteLater()
-            self.summary_progress_widget = None
+        self._hide_status_progress()
 
         if success:
             self._update_status(f"✅ {result}", "success")
@@ -5235,19 +5323,9 @@ class MainWindow(QMainWindow):
         room_name = room.name
 
         # UI 프로그레스 위젯 표시
-        self.summary_progress_widget = SummaryProgressWidget(
-            self, llm_name="URL", room_name=room_name
+        self._show_status_progress(
+            room_name=room_name, llm_name="URL", icon="🔗"
         )
-        self.summary_progress_widget.setMinimumHeight(28)
-        self.summary_progress_widget.setMaximumHeight(28)
-
-        # 기존 상태바 컨테이너 임시 제거
-        if hasattr(self, '_statusbar_container'):
-            self.statusbar.removeWidget(self._statusbar_container)
-
-        # 프로그레스 위젯을 상태바에 직접 추가
-        self.statusbar.addWidget(self.summary_progress_widget, 1)
-        self.summary_progress_widget.show()
         
         self._url_sync_cancelled = False
         def cancel_sync():
@@ -5331,14 +5409,7 @@ class MainWindow(QMainWindow):
                 
         finally:
             self.sync_url_btn.setEnabled(True)
-            if self.summary_progress_widget:
-                self.statusbar.removeWidget(self.summary_progress_widget)
-                self.summary_progress_widget.deleteLater()
-                self.summary_progress_widget = None
-
-            # 기존 상태바 컨테이너 복원
-            if hasattr(self, '_statusbar_container'):
-                self.statusbar.addWidget(self._statusbar_container, 1)
+            self._hide_status_progress()
     
     @Slot()
     def _restore_url_from_file(self):
@@ -5504,7 +5575,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "카카오톡 대화 분석기",
             """<h3>🗨️ 카카오톡 대화 분석기</h3>
-            <p>버전 2.9.21</p>
+            <p>버전 2.9.23</p>
             <p>카카오톡 대화를 분석하고 AI로 상세 분석하는 도구입니다.</p>
             <p>제작자: 민연홍<br>
             <a href="https://github.com/YeonHongMin/kakao-chat-summary">https://github.com/YeonHongMin/kakao-chat-summary</a></p>

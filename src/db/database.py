@@ -38,7 +38,7 @@ def _load_env_local_once() -> None:
             load_dotenv(env_local, override=True)
         elif env_file.exists():
             load_dotenv(env_file, override=True)
-    except ImportError:
+    except Exception:
         pass
 
 
@@ -268,40 +268,76 @@ class Database:
     
     # ==================== Message 관련 ====================
     
-    def add_messages(self, room_id: int, messages: List[Dict[str, Any]], batch_size: int = 500) -> int:
-        """메시지 일괄 추가 (중복 무시, 배치 처리)."""
+    def add_messages(self, room_id: int, messages: List[Dict[str, Any]], batch_size: int = 2000) -> int:
+        """메시지 일괄 추가 (범위 1회 SELECT + 벌크 INSERT OR IGNORE, 단일 트랜잭션)."""
+        if not messages:
+            return 0
+
+        dates = [m['date'] for m in messages if m.get('date') is not None]
+        if not dates:
+            return 0
+
+        min_date = min(dates)
+        max_date = max(dates)
         added_count = 0
-        
-        # 배치 단위로 처리
-        for i in range(0, len(messages), batch_size):
-            batch = messages[i:i + batch_size]
-            
-            with self.get_session() as session:
-                for msg_data in batch:
-                    try:
-                        # 중복 체크
-                        existing = session.query(Message).filter(
-                            Message.room_id == room_id,
-                            Message.sender == msg_data['sender'],
-                            Message.message_date == msg_data['date'],
-                            Message.message_time == msg_data.get('time'),
-                            Message.content == msg_data.get('content')
-                        ).first()
-                        
-                        if existing is None:
-                            msg = Message(
-                                room_id=room_id,
-                                sender=msg_data['sender'],
-                                content=msg_data.get('content'),
-                                message_date=msg_data['date'],
-                                message_time=msg_data.get('time'),
-                                raw_line=msg_data.get('raw_line')
-                            )
-                            session.add(msg)
-                            added_count += 1
-                    except Exception as e:
-                        continue
-        
+
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        with self.get_session() as session:
+            # 1. 대상 날짜 범위의 기존 메시지 키를 단 1회 조회 (N+1 SELECT 제거, NULL 포함 정합성 보장)
+            existing_rows = (
+                session.query(
+                    Message.sender,
+                    Message.message_date,
+                    Message.message_time,
+                    Message.content,
+                )
+                .filter(
+                    Message.room_id == room_id,
+                    Message.message_date >= min_date,
+                    Message.message_date <= max_date,
+                )
+                .all()
+            )
+            existing_keys = set(existing_rows)
+
+            # 2. 메모리에서 중복 제거 (기존 DB + 입력 배치 내부 중복 모두 필터링)
+            now = datetime.now()
+            to_insert: List[Dict[str, Any]] = []
+            for msg_data in messages:
+                key = (
+                    msg_data['sender'],
+                    msg_data['date'],
+                    msg_data.get('time'),
+                    msg_data.get('content'),
+                )
+                if key in existing_keys:
+                    continue
+                existing_keys.add(key)
+                to_insert.append({
+                    'room_id': room_id,
+                    'sender': msg_data['sender'],
+                    'content': msg_data.get('content'),
+                    'message_date': msg_data['date'],
+                    'message_time': msg_data.get('time'),
+                    'raw_line': msg_data.get('raw_line'),
+                    'created_at': now,
+                })
+
+            if not to_insert:
+                return 0
+
+            # 3. 벌크 INSERT OR IGNORE (SQLite 파라미터 상한 고려해 2000건 청크, 단일 커밋)
+            chunk_size = min(max(batch_size, 1), 2000)
+            for i in range(0, len(to_insert), chunk_size):
+                chunk = to_insert[i:i + chunk_size]
+                stmt = sqlite_insert(Message).values(chunk).on_conflict_do_nothing()
+                result = session.execute(stmt)
+                if result.rowcount is not None and result.rowcount >= 0:
+                    added_count += result.rowcount
+                else:
+                    added_count += len(chunk)
+
         return added_count
     
     def get_messages_by_room(self, room_id: int, 

@@ -1,6 +1,6 @@
-﻿<#
+<#
 .SYNOPSIS
-    카카오톡 대화 분석기 백그라운드 실행 (v2.9.21)
+    카카오톡 대화 분석기 백그라운드 실행 (v2.9.23)
 
 .DESCRIPTION
     pythonw로 GUI 앱을 Cursor와 분리해 실행합니다.
@@ -45,7 +45,7 @@ $appArg = "src\app.py"
 
 function Stop-ExistingAppProcesses {
     $existing = Get-CimInstance Win32_Process -Filter "name='python.exe' OR name='pythonw.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like "*src\app.py*" -or $_.CommandLine -like "*src/app.py*" }
+    Where-Object { $_.CommandLine -like "*src\app.py*" -or $_.CommandLine -like "*src/app.py*" }
 
     if ($existing) {
         Write-Output "[STOP] 기존 앱 프로세스 종료"

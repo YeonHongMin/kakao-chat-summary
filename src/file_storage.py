@@ -51,44 +51,56 @@ class FileStorage:
     
     # ==================== Original (원본 대화) ====================
     
-    def save_daily_original(self, room_name: str, date_str: str, messages: List[str]) -> Path:
-        """
-        일별 원본 대화 저장 (중복 merge).
-        
-        Args:
-            room_name: 채팅방 이름
-            date_str: 날짜 (YYYY-MM-DD)
-            messages: 메시지 목록
-        
+    def _compute_messages_hash(self, messages: List[str]) -> str:
+        """메시지 목록의 본문 MD5 해시 계산 (메모리 연산)."""
+        if not messages:
+            return ""
+        content = "\n".join(msg.strip() for msg in messages)
+        return hashlib.md5(content.encode('utf-8')).hexdigest()
+
+    def save_daily_original_with_stats(
+        self, room_name: str, date_str: str, messages: List[str]
+    ) -> Tuple[Path, str, str, int, int]:
+        """일별 원본 대화 저장(중복 merge) + 변경 전/후 해시·개수 반환 (파일 1회 읽기).
+
         Returns:
-            저장된 파일 경로
+            (filepath, old_hash, new_hash, old_count, new_count)
         """
-        # 디렉토리 생성
         room_dir = self.original_dir / self._sanitize_name(room_name)
         room_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 파일명: <채팅방>_yyyymmdd_full.md
+
         date_compact = date_str.replace("-", "")
         filename = f"{self._sanitize_name(room_name)}_{date_compact}_full.md"
         filepath = room_dir / filename
-        
-        # 기존 내용 로드 (있으면)
+
+        # 기존 내용 1회 로드
         existing_messages = self._load_existing_messages(filepath)
-        
+
         # [Safety Check] 기존 파일이 존재하고 비어있지 않은데, 메시지를 0개로 인식한 경우
-        # (파싱 실패 또는 포맷 불일치로 인한 데이터 유실 방지)
         if filepath.exists() and filepath.stat().st_size > 100 and not existing_messages:
-            # 헤더/푸터 인식 실패로 간주하고, 원본 내용을 라인 단위로 읽어들임
             content = filepath.read_text(encoding='utf-8')
-            existing_messages = [line for line in content.split('\n') if line.strip() and not line.strip().startswith('---')]
+            existing_messages = [
+                line for line in content.split('\n')
+                if line.strip() and not line.strip().startswith('---')
+            ]
+
+        old_hash = self._compute_messages_hash(existing_messages)
+        old_count = len(existing_messages)
 
         # 중복 제거 및 merge
         merged_messages = self._merge_messages(existing_messages, messages)
 
         # [Safety Check 1] 병합된 데이터가 기존 데이터보다 적으면 저장하지 않음 (삭제 방지)
-        if len(merged_messages) < len(existing_messages):
-            print(f"⚠️ [Warning] 데이터 감소 감지 (개수): 기존 {len(existing_messages)}개 -> 병합 {len(merged_messages)}개. 저장을 건너뜁니다.")
-            return filepath
+        if len(merged_messages) < old_count:
+            print(f"⚠️ [Warning] 데이터 감소 감지 (개수): 기존 {old_count}개 -> 병합 {len(merged_messages)}개. 저장을 건너뜁니다.")
+            return filepath, old_hash, old_hash, old_count, old_count
+
+        new_hash = self._compute_messages_hash(merged_messages)
+        new_count = len(merged_messages)
+
+        # 변경이 전혀 없고 파일이 이미 있으면 불필요한 NFS 덮어쓰기 생략
+        if filepath.exists() and old_hash == new_hash and old_count == new_count:
+            return filepath, old_hash, new_hash, old_count, new_count
 
         # 파일 저장 준비
         content = self._format_original_content(room_name, date_str, merged_messages)
@@ -101,13 +113,41 @@ class FileStorage:
 
             if size_ratio < 0.8:  # 20% 이상 감소
                 print(f"⚠️ [Warning] 파일 크기 감소 감지: 기존 {old_size:,}B -> 신규 {new_size:,}B ({size_ratio:.1%}). 저장을 건너뜁니다.")
-                return filepath
+                return filepath, old_hash, old_hash, old_count, old_count
 
-        # 파일 저장
         filepath.write_text(content, encoding='utf-8')
-        
+        return filepath, old_hash, new_hash, old_count, new_count
+
+    def save_daily_original(self, room_name: str, date_str: str, messages: List[str]) -> Path:
+        """일별 원본 대화 저장 (중복 merge)."""
+        filepath, _, _, _, _ = self.save_daily_original_with_stats(room_name, date_str, messages)
         return filepath
-    
+
+    def save_all_daily_originals_with_stats(
+        self, room_name: str, messages_by_date: Dict[str, List[str]],
+        cutoff_date: str = None
+    ) -> Tuple[List[Path], Dict[str, Tuple[str, str, int, int]]]:
+        """모든 날짜의 원본 대화 저장 + 날짜별 (old_hash, new_hash, old_count, new_count) 반환."""
+        saved_files: List[Path] = []
+        diff_stats: Dict[str, Tuple[str, str, int, int]] = {}
+        skipped = 0
+
+        for date_str in sorted(messages_by_date.keys()):
+            if cutoff_date and date_str < cutoff_date:
+                skipped += 1
+                continue
+            messages = messages_by_date[date_str]
+            filepath, old_hash, new_hash, old_count, new_count = self.save_daily_original_with_stats(
+                room_name, date_str, messages
+            )
+            saved_files.append(filepath)
+            diff_stats[date_str] = (old_hash, new_hash, old_count, new_count)
+
+        if skipped > 0:
+            print(f"ℹ️  {skipped}일 과거 날짜 원본 파일 보호 (< {cutoff_date})")
+
+        return saved_files, diff_stats
+
     def save_all_daily_originals(self, room_name: str, messages_by_date: Dict[str, List[str]],
                                    cutoff_date: str = None) -> List[Path]:
         """모든 날짜의 원본 대화 저장.
@@ -117,20 +157,9 @@ class FileStorage:
             messages_by_date: 날짜별 메시지
             cutoff_date: 이 날짜 미만은 건너뜀 (YYYY-MM-DD). None이면 전체 저장.
         """
-        saved_files = []
-        skipped = 0
-
-        for date_str in sorted(messages_by_date.keys()):
-            if cutoff_date and date_str < cutoff_date:
-                skipped += 1
-                continue
-            messages = messages_by_date[date_str]
-            filepath = self.save_daily_original(room_name, date_str, messages)
-            saved_files.append(filepath)
-
-        if skipped > 0:
-            print(f"ℹ️  {skipped}일 과거 날짜 원본 파일 보호 (< {cutoff_date})")
-
+        saved_files, _ = self.save_all_daily_originals_with_stats(
+            room_name, messages_by_date, cutoff_date=cutoff_date
+        )
         return saved_files
     
     def load_daily_original(self, room_name: str, date_str: str) -> List[str]:

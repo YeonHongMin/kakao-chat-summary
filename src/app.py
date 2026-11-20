@@ -22,11 +22,18 @@ _here = Path(__file__).resolve().parent
 sys.path.insert(0, str(_here))
 _base = _here.parent
 
-# 앱 기동 시 .env.local이 없으면 env.local.example을 복사하여 생성
+# 앱 기동 시 .env.local이 없으면 env.local.example을 복사 시도
+# (복사 실패·예제 파일 부재여도 앱 기동은 차단하지 않고 UI에서 설정 안내 알림 표시)
 _env_local = _base / ".env.local"
 _env_example = _base / "env.local.example"
+_env_created = False
+_env_copy_error = None
 if not _env_local.exists() and _env_example.exists():
-    shutil.copy2(_env_example, _env_local)
+    try:
+        shutil.copy2(_env_example, _env_local)
+        _env_created = True
+    except Exception as _e:
+        _env_copy_error = str(_e)
 
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QStyle, QMessageBox
 from PySide6.QtCore import Qt
@@ -48,7 +55,7 @@ def main():
     
     # 앱 정보 설정
     app.setApplicationName("카카오톡 대화 분석기")
-    app.setApplicationVersion("2.9.21")
+    app.setApplicationVersion("2.9.23")
     app.setOrganizationName("KakaoTalk Chat Summary")
     
     # 기본 폰트 설정 (한글 지원)
@@ -66,7 +73,7 @@ def main():
     db = get_db()
     
     # 메인 윈도우 생성
-    window = MainWindow()
+    window = MainWindow(env_created=_env_created, env_copy_error=_env_copy_error)
     
     # 시스템 트레이 아이콘 추가
     if QSystemTrayIcon.isSystemTrayAvailable():

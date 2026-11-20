@@ -262,6 +262,15 @@ class Config:
         key = os.getenv(provider_info.env_key)
         return None if self._is_placeholder(key) else key
 
+    def has_any_api_key(self) -> bool:
+        """클라우드 LLM 제공자 중 유효한(placeholder 아닌) API 키가 1개 이상 설정되었는지 확인."""
+        for key, provider in LLM_PROVIDERS.items():
+            if not provider.env_key:
+                continue
+            if self.get_api_key(key):
+                return True
+        return False
+
     def set_api_key(self, api_key: str, provider: Optional[str] = None) -> None:
         provider = provider or self.current_provider
         self._api_keys[provider] = api_key.strip()

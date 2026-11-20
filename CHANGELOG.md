@@ -3,6 +3,35 @@
 형식: [Semantic Versioning](https://semver.org/)에 가깝게 **주.부.패치**로 표기합니다.  
 이전 버전의 상세 히스토리는 `README.md`의 “변경 이력” 절과 `docs/06-tasks.md`를 참고하세요.
 
+## [2.9.23] — 2026-11-20
+
+### `.env.local` 미설정 시 정상 기동 및 초기 설정 안내 알림
+
+- 🛡️ **`.env.local` 부재/오류 시에도 무조건 정상 기동**: `.env.local` 파일이 없거나 `env.local.example` 자동 복사 실패·권한 오류가 발생해도 앱 기동이 차단되지 않고 메인 윈도우가 정상적으로 열리도록 방어 (`src/app.py`, `src/full_config.py`, `src/db/database.py`)
+- 🔔 **기동 직후 초기 설정 안내 팝업 (`_check_initial_env_setup`)**: `.env.local`이 없거나 placeholder 키만 있는 경우, 창이 열린 직후 `⚙️ 초기 설정 안내 (.env.local)` 알림을 표시하고 `[⚙️ 지금 설정하기]` 클릭 시 즉시 설정 다이얼로그를 열어 API 키를 입력·저장할 수 있도록 개선
+- ⚙️ **상세 분석 실행 시 API 키 미설정 안내 일원화 (`_ensure_api_key_or_prompt_settings`)**: `Ctrl+G`, `Ctrl+Shift+G`(전체 채팅방), 단일 날짜 상세 생성, 일괄 상세 생성 진입 시 선택한 LLM의 API 키가 없으면 설정 창 열기를 즉시 제안
+
+### 버전 표시
+
+- `app.py`, About 다이얼로그, `start_background.ps1` → `2.9.23`
+
+---
+
+## [2.9.22] — 2026-11-20
+
+### 파일 업로드 고속화 및 하단 상태바 복원
+
+- 🚀 **DB 메시지 저장 고속화 (`Database.add_messages`)**: 메시지 1건마다 개별 `SELECT` 중복 조회(N+1) + 500건마다 커밋하던 구조를 대상 날짜 범위 **1회 `SELECT` + 메모리 `set` 필터링 + SQLite 벌크 `INSERT OR IGNORE` 단일 트랜잭션**으로 전환. `FileUploadWorker`도 날짜별 반복 호출 대신 최근 날짜 전체 메시지를 한 번에 반영 (NFS 환경 대용량 업로드 수십 초 → 수 초 내 단축)
+- ⚡ **NFS 일별 원본 파일 반복 읽기 통합 (`FileStorage.save_daily_original_with_stats`)**: 업로드 시 날짜당 5회 반복 읽던 원본 `.md`를 1회 읽기로 통합하고, 변경이 없는 날짜는 불필요한 덮어쓰기 생략
+- 🐛 **하단 상태바 영구 숨김 버그 수정**: `QStatusBar.removeWidget()`이 `_statusbar_container`를 `hide()` 시킨 뒤 복원 시 `.show()`가 누락되어 상태바가 사라지던 문제 수정. 모든 프로그레스 표시/복원을 `_show_status_progress` / `_hide_status_progress`로 일원화하고 파일 업로드 중에도 상태바 프로그레스바 표시
+- 🛡️ **`FileUploadWorker` QThread 시그널 정비**: `finished` 섀도잉 제거 → `done = Signal(bool, str, int)` 분리 및 `finished.connect(deleteLater)` 연결
+
+### 버전 표시
+
+- `app.py`, About 다이얼로그, `start_background.ps1` → `2.9.22`
+
+---
+
 ## [2.9.21] — 2026-10-20
 
 ### 업로드 후속 처리 개선 (행 / 선택 강탈 / 알림음)
